@@ -1,3 +1,5 @@
+> 🇨🇳 中文 | [🇺🇸 English](README_EN.md)
+
 # AI Modeling Assistant for Blender
 
 > AI 驱动的 3D 建模助手 — 让 AI 成为你的建模搭档，而不是只会堆方块的实习生。
