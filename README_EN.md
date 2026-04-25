@@ -1,3 +1,5 @@
+> 🇨🇳 [中文](README.md) | 🇺🇸 English
+
 # AI Modeling Assistant for Blender
 
 > An AI-powered 3D modeling copilot that transcends primitive-stacking — engineered for production-grade asset creation.
