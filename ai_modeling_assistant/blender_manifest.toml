@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+id = "ai_modeling_assistant"
+version = "3.2.0"
+name = "AI in Blender — Agent Platform"
+tagline = "Expert workflows for modeling, animation and generated assets"
+maintainer = "AI-In-Blender contributors"
+type = "add-on"
+website = "https://github.com/hxjyaohaohaode/AI-In-Blender"
+tags = ["3D View", "Modeling", "Animation"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-only"]
+
+[permissions]
+network = "Call user-configured AI providers and download generated assets"
+files = "Store memories, scene branches and generated media"

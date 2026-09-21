@@ -1,0 +1,17 @@
+[project]
+name = "ai-in-blender"
+version = "3.2.0"
+description = "A multi-model expert workflow studio inside Blender"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F", "E9"]
+ignore = ["F722"]
+
+[tool.ruff.lint.per-file-ignores]
+"ai_modeling_assistant/blender/*.py" = ["F821"]
