@@ -1,12 +1,23 @@
 > 中文 | [English](README_EN.md)
 
-# AI in Blender · Agent Platform 3.1
+# AI in Blender · Agent Platform 3.2
 
 在 Blender 中运行带持久对话、可审计记忆、多模态输入和受检验执行分支的智能体工作平台。架构智能体规划装配与任务，专家分别生成部件、材质、绑定、动画和媒体，人可以在过程中继续编辑。
 
 独立部件分支可以并行，共享场景提交串行且检查人工修改冲突。结构质量门不能省略，视觉验收默认需要人确认。插件提供可验证的执行机制，不承诺任意模型或提示词都能产出专家级作品。完整设计见 [平台设计](docs/PLATFORM_DESIGN.md)，实操见 [平台使用指南](docs/PLATFORM_GUIDE.md)。
 
-## 3.1 平台能力
+## 3.2 工作流可靠性升级
+
+3.2 修复 GitHub 上 Blender 3.6 材质回退失败，并补齐记忆、压缩、协作、恢复和质检的执行约束。完整状态转移、故障处理和验收边界见 [生产工作流规范](docs/WORKFLOW_LIFECYCLES.md)。
+
+- **记忆演进**：重复证据合并、会话/项目/个人优先级、重要约束保护、遗忘后的重复提取抑制、带实际结果的任务情景记忆。
+- **上下文预算**：按完整原文分批压缩；所有模型调用都扣除输出与图像预留；缺省历史显式可见。
+- **任务恢复**：独立失败不取消其他分支；调用前持久化记录；有 ID 的生成任务通过 GET 恢复；产物以 SHA-256 校验。
+- **质量闭环**：对求值后的修改器网格检查；继承部件质量合同；创作修复后必须再评审；导出前重新验收。
+- **编辑保护**：新增权重、属性、NLA、UV 区域、单位/帧率冲突检查，以及媒体导入失败的清理。
+- **安装验收**：CI 测试源码、传统 ZIP、真实扩展安装及扩展内的工作进程。对应提交的结果见 [Actions](https://github.com/hxjyaohaohaode/AI-In-Blender/actions)。
+
+## 平台能力
 
 - **真实多轮对话**：SQLite 保存项目、多个会话与逐条原文，重新打开文件后可继续。历史不是仅存在内存中的最近几条消息。
 - **自动语义压缩**：到达预算阈值调用摘要模型，保存带来源编号的摘要检查点；原文保留。失败时明确使用抽取式降级摘要。
@@ -54,9 +65,9 @@
 | 版本 | 状态 |
 |---|---|
 | Windows + Blender 5.1.1 | 本机实际验证，详见 [验证记录](docs/VALIDATION.md) |
-| 3.6 系列 | 保留 Python 3.10、传统插件安装和旧 OBJ/STL API 分支；待跨版本实测 |
-| 4.2–4.5 系列 | 扩展清单与新版导出 API 分支；待跨版本实测 |
-| 其他 4.x/5.x、macOS、Linux | 避免平台依赖，但本次未实测 |
+| Linux + 3.6.23 | CI：源码、预设、流程与传统 ZIP 安装 |
+| Linux + 4.2.0 / 4.5.3 / 5.1.1 | CI：源码、传统 ZIP、真实扩展安装及工作进程 |
+| 其他 4.x/5.x、macOS | 未列入实测矩阵 |
 
 最低版本为 **Blender 3.6**；不支持 2.x、3.0–3.5，也不保证未来版本无需适配。仓库包含 3.6.23 / 4.2.0 / 4.5.3 / 5.1.1 的 CI 矩阵，未运行的矩阵不视为通过证明。
 
@@ -66,8 +77,8 @@
 python tools/build.py
 ```
 
-- `dist/ai-in-blender-3.1.0-extension.zip`：Blender 4.2+，Preferences → Get Extensions → Install from Disk。
-- `dist/ai-in-blender-3.1.0-legacy.zip`：Blender 3.6+，Preferences → Add-ons → Install / Install from Disk。
+- `dist/ai-in-blender-3.2.0-extension.zip`：Blender 4.2+，Preferences → Get Extensions → Install from Disk。
+- `dist/ai-in-blender-3.2.0-legacy.zip`：Blender 3.6+，Preferences → Add-ons → Install / Install from Disk。
 - `dist/SHA256SUMS.txt`：安装包校验值。
 
 两种包选择一种。升级前停用旧的单文件插件，避免 `ama.*` 操作符重复注册。新版不再单独分发 `.py`。运行时无需额外 pip 依赖。启用后在 3D View 按 **N**，打开 **AI Model**。

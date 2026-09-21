@@ -4,21 +4,102 @@ Blender's Python API is powerful. Only execute code from a provider you trust.
 This guard blocks common destructive/file/process APIs and introspection tricks;
 it cannot make arbitrary Python or Blender data intrinsically safe.
 """
+
 import ast
 from .responses import extract_code
 
-ALLOWED_MODULES = frozenset({"bpy", "bmesh", "mathutils", "math", "random",
-                             "collections", "itertools", "functools", "copy"})
-SAFE_BUILTINS = frozenset({"abs", "all", "any", "bool", "dict", "enumerate", "filter",
-    "float", "frozenset", "int", "isinstance", "iter", "len", "list", "map", "max", "min",
-    "next", "pow", "print", "range", "repr", "reversed", "round", "set", "slice", "sorted",
-    "str", "sum", "tuple", "zip", "Exception", "ValueError", "RuntimeError", "TypeError"})
-FORBIDDEN_NAMES = frozenset({"eval", "exec", "compile", "open", "getattr", "setattr",
-    "delattr", "globals", "locals", "vars", "dir", "type", "breakpoint", "input", "help"})
-FORBIDDEN_ATTRS = frozenset({"driver_namespace", "handlers", "timers", "preferences",
-    "user_resource", "script_paths", "as_pointer", "bl_rna", "rna_type", "path_resolve",
-    "save", "save_render", "filepath", "filepath_raw", "write", "read", "load", "pack",
-    "unpack", "to_driver", "driver_add", "driver_remove"})
+ALLOWED_MODULES = frozenset(
+    {"bpy", "bmesh", "mathutils", "math", "random", "collections", "itertools", "functools", "copy"}
+)
+SAFE_BUILTINS = frozenset(
+    {
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "dict",
+        "enumerate",
+        "filter",
+        "float",
+        "frozenset",
+        "int",
+        "isinstance",
+        "iter",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "next",
+        "pow",
+        "print",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+        "Exception",
+        "ValueError",
+        "RuntimeError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "AttributeError",
+        "ZeroDivisionError",
+        "StopIteration",
+    }
+)
+FORBIDDEN_NAMES = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "type",
+        "breakpoint",
+        "input",
+        "help",
+    }
+)
+FORBIDDEN_ATTRS = frozenset(
+    {
+        "driver_namespace",
+        "handlers",
+        "timers",
+        "preferences",
+        "user_resource",
+        "script_paths",
+        "as_pointer",
+        "bl_rna",
+        "rna_type",
+        "path_resolve",
+        "save",
+        "save_render",
+        "filepath",
+        "filepath_raw",
+        "write",
+        "read",
+        "load",
+        "pack",
+        "unpack",
+        "to_driver",
+        "driver_add",
+        "driver_remove",
+    }
+)
 
 
 def attribute_path(node):
@@ -70,10 +151,22 @@ class SecurityValidator:
             path = attribute_path(node)
             first, _, rest = path.partition(".")
             path = aliases.get(first, first) + ("." + rest if rest else "")
-            if any(path == p or path.startswith(p + ".") for p in (
-                    "bpy.ops.wm", "bpy.ops.script", "bpy.ops.console", "bpy.ops.text",
-                    "bpy.ops.preferences", "bpy.ops.import_scene", "bpy.ops.export_scene",
-                    "bpy.ops.object.delete", "bpy.data.libraries", "bpy.utils", "bpy.path")):
+            if any(
+                path == p or path.startswith(p + ".")
+                for p in (
+                    "bpy.ops.wm",
+                    "bpy.ops.script",
+                    "bpy.ops.console",
+                    "bpy.ops.text",
+                    "bpy.ops.preferences",
+                    "bpy.ops.import_scene",
+                    "bpy.ops.export_scene",
+                    "bpy.ops.object.delete",
+                    "bpy.data.libraries",
+                    "bpy.utils",
+                    "bpy.path",
+                )
+            ):
                 return False, f"Blender API not allowed: {path}"
             if path.startswith("bpy.data.") and path.endswith((".remove", ".batch_remove")):
                 return False, "Generated code may not delete existing scene data"

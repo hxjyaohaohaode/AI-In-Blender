@@ -1,62 +1,40 @@
-# Implementation state
+# Implementation status: Agent Platform 3.2
 
-## Completed baseline: Expert Studio 3.0
+The original single-file add-on was replaced on `codex/studio-refactor`. The first
+published candidate was `207cfc8`, reviewed in PR #1. Its GitHub Blender 3.6 job failed
+seven preset subtests because `KeyError` was missing from restricted builtins.
+Version 3.2 fixes that regression and strengthens production lifecycle enforcement.
 
-The original repository was cloned at `3e0e01f` into the current workspace. Work is
-on `codex/studio-refactor`; no GitHub publication has been performed. The monolith is
-replaced by 41 Python modules, asynchronous provider processes, typed expert plans,
-review/repair/failure states, media import and source-preserving export. Model APIs
-are exercised with loopback fixtures, not paid credentials. The installed host is
-Windows / Blender 5.1.1. Legacy and real extension installation smoke tests pass.
-The HELIO offline example, render, animated GLB and .blend are in `artifacts/demo`.
+## Implemented and regression-tested mechanisms
 
-Core/protocol/package tests: 38 passed before the platform expansion. Blender suite
-has since gained provider routing coverage; rerun it after subsequent changes.
-Old-version downloads failed (403/TLS/redirect errors), so 3.6/4.x remain unverified
-compatibility paths, with a future CI matrix. Original single-file add-on was removed.
+- Persistent multi-turn conversations, scoped source-backed memory and SQLite v2
+  migration; review/expiry/conflict/forget workflows and execution episodes.
+- Complete-turn bounded compaction, source coverage validation, fixed user
+  constraints and accounting of maintenance/planning/repair/vision requests.
+- Dependency readiness independent of unrelated failures, isolated part lanes,
+  per-run call journals, retained successful tasks and checked checkpoint recovery.
+- Hashed assets, verified Bridge uploads and GET recovery for known remote jobs;
+  ambiguous POST submissions are not blindly replayed.
+- Isolated code execution, evaluated candidate validation, inherited contracts,
+  region protection for geometry/UV/weights and scene/unit/timeline conflicts.
+- Bounded review-repair-review cycles; quality gates and default human approval.
+- Media decode/import compensation, traditional and extension package installation,
+  normalized deterministic ZIP output, Windows/Linux core and Blender CI matrices.
 
-## User's expanded acceptance requirements
+Full behavior and failure transitions: [WORKFLOW_LIFECYCLES.md](WORKFLOW_LIFECYCLES.md).
+Commands and evidence: [VALIDATION.md](VALIDATION.md). Live run status is on the
+[repository Actions page](https://github.com/hxjyaohaohaode/AI-In-Blender/actions).
 
-No further clarification questions: the one permitted question round was completed.
-The new scope is a real persistent agent platform, including multi-turn conversation,
-semantic context compression, short/long/project memory and intelligent versioned
-memory evolution, personalization, proactive assistance, multimodal inputs and
-outputs, complex hierarchical multi-agent planning, multiple concurrent workflows,
-mandatory evidence-based quality checks, sketch input and precise human editing.
+## Verification boundaries
 
-## Implemented platform expansion: 3.1
+Provider protocols are tested with local HTTP fixtures and real subprocesses. No
+claim is made that paid LLM/Meshy/video/voice/world accounts, arbitrary vendor APIs,
+or expert artistic quality were validated. Third-party world models need an actual
+Bridge implementation. Grease Pencil creation is automated; interactive freehand
+drawing and viewport capture still require a GUI acceptance session. Workbench
+evidence is geometry preview, not a complete PBR or animation quality assessment.
 
-The expansion now includes core/memory.py, context.py and attachments.py; persistent
-Blender dialogue and memory review UI; native sketch and region capture; SceneJob and
-scene_worker.py isolated execution; native quality contracts and rendered previews;
-parallel independent task lanes and multiple production workflows; local proactive
-checks; source-bound memory evolution; Bridge v2 uploads; backup/erasure and explicit
-checkpoint recovery. Detailed operating behavior is in PLATFORM_GUIDE.md.
-
-Blender integration reached 32 passing tests before final packaging. The final counts,
-artifact/install checks and verification boundaries are maintained in VALIDATION.md.
-No real paid model credentials, other Blender versions or actual freehand viewport
-capture have been validated. Complex external datablock conflict detection, final PBR
-visual scoring, arbitrary vendor adapters and an OS-level sandbox are not claimed.
-
-## Original expansion sequence (now implemented within documented bounds)
-
-1. Specify memory provenance, scope isolation, conflict resolution and evolution;
-   implement persistent conversations and a tested SQLite memory service.
-2. Integrate asynchronous semantic compression/extraction and retrieval into actual
-   multi-turn model requests; expose chat, project identity and memory inspection.
-3. Add multimodal attachments and native sketch/viewport capture, with explicit
-   provider capabilities and bridge upload contracts.
-4. Introduce task contracts, project/asset revisions and isolated Blender execution
-   workspaces; validate human-edit conflicts before committing generated changes.
-5. Enforce native and model/human quality gates, repair loops and evidence-backed
-   export decisions; store gate outcomes in run and memory provenance.
-6. Support bounded independent tasks/workflows with serialized scene commits,
-   resource budgets and cancellation, plus non-destructive proactive suggestions.
-7. Verify failure/repair/conflict/memory/concurrency workflows; rebuild installers,
-   documentation, examples and final validation records.
-
-Do not claim universal model availability, expert-level visual quality, transactional
-rollback of unrestricted Python, or cross-version compatibility without evidence.
-Do not spawn development sub-agents: the user's agent-cluster requirements refer to
-the product. Persistent Python threads remain prohibited inside the Blender process.
+Compatibility is measured for the versions in CI, not all historical/future Blender
+versions. Complex external texture/driver/third-party data semantics are not a
+perfectly fingerprinted graph. Generated Python runs in a separate Blender process,
+which protects the editing session but is not an operating-system security sandbox.

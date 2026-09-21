@@ -1,4 +1,5 @@
 """Blender input capture and explicit multimodal provider conditioning."""
+
 import json
 import uuid
 import bpy
@@ -20,15 +21,26 @@ def add(scene, path, role="reference"):
     return value
 
 
-def attach_to_messages(scene, messages, config):
-    refs = items(scene)
+def attach_to_messages(scene, messages, config, *, snapshot=None):
+    refs = snapshot["attachments"] if snapshot is not None else items(scene)
     if refs:
         original = messages[-1]["content"]
-        messages[-1]["content"] = [{"type": "text", "text": original}] + vision_parts(refs, enabled=config.options.get("vision", False))
-    if scene.ama_props.region_json:
-        region = "\nSelected edit region (scope, not permission to modify other regions):\n" + scene.ama_props.region_json[:24000]
+        parts = original if isinstance(original, list) else [{"type": "text", "text": original}]
+        messages[-1]["content"] = parts + vision_parts(
+            refs, enabled=config.options.get("vision", False)
+        )
+    regions = (
+        snapshot["region"]
+        if snapshot is not None
+        else json.loads(scene.ama_props.region_json or "[]")
+    )
+    if regions:
+        region = (
+            "\nSelected edit region (scope, not permission to modify other regions):\n"
+            + json.dumps(regions)
+        )
         if isinstance(messages[-1]["content"], list):
-            messages[-1]["content"].append({"type":"text", "text":region})
+            messages[-1]["content"].append({"type": "text", "text": region})
         else:
             messages[-1]["content"] += region
 
@@ -36,14 +48,23 @@ def attach_to_messages(scene, messages, config):
 def capture_region(context):
     import bmesh
     from .revision import fingerprint, ensure_ids
-    objects = list(context.objects_in_mode) if context.mode == 'EDIT_MESH' else list(context.selected_objects)
+
+    objects = (
+        list(context.objects_in_mode)
+        if context.mode == "EDIT_MESH"
+        else list(context.selected_objects)
+    )
     if not objects:
         raise ValueError("Select an object or mesh vertices/faces first")
     ensure_ids(objects)
     result = []
     for obj in objects:
-        record = {"object": obj.name, "asset_id": obj['ama_asset_id'], "fingerprint": fingerprint([obj])}
-        if obj.type == 'MESH' and obj.mode == 'EDIT':
+        record = {
+            "object": obj.name,
+            "asset_id": obj["ama_asset_id"],
+            "fingerprint": fingerprint([obj]),
+        }
+        if obj.type == "MESH" and obj.mode == "EDIT":
             mesh = bmesh.from_edit_mesh(obj.data)
             mesh.verts.ensure_lookup_table()
             mesh.faces.ensure_lookup_table()
@@ -59,37 +80,52 @@ def capture_region(context):
 def capture_view(context):
     if bpy.app.background:
         raise ValueError("Viewport capture requires an interactive Blender window")
-    area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
+    area = next((a for a in context.screen.areas if a.type == "VIEW_3D"), None)
     if not area:
         raise ValueError("Open a 3D viewport before capturing a reference")
     from .conversation import database_path
+
     folder = database_path().parent / "references"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / (uuid.uuid4().hex + '.png')
+    path = folder / (uuid.uuid4().hex + ".png")
     scene = context.scene
-    saved = (scene.render.filepath, scene.render.image_settings.file_format,
-             scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage)
+    saved = (
+        scene.render.filepath,
+        scene.render.image_settings.file_format,
+        scene.render.resolution_x,
+        scene.render.resolution_y,
+        scene.render.resolution_percentage,
+    )
     try:
         scene.render.filepath = str(path)
-        scene.render.image_settings.file_format = 'PNG'
-        scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = 768, 768, 100
-        region = next(r for r in area.regions if r.type == 'WINDOW')
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = (
+            768,
+            768,
+            100,
+        )
+        region = next(r for r in area.regions if r.type == "WINDOW")
         with context.temp_override(area=area, region=region):
             bpy.ops.render.opengl(write_still=True, view_context=True)
     finally:
-        (scene.render.filepath, scene.render.image_settings.file_format,
-         scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage) = saved
+        (
+            scene.render.filepath,
+            scene.render.image_settings.file_format,
+            scene.render.resolution_x,
+            scene.render.resolution_y,
+            scene.render.resolution_percentage,
+        ) = saved
     return add(scene, path, role="sketch_or_viewport")
 
 
 def new_sketch():
-    if bpy.context.mode != 'OBJECT':
-        bpy.ops.object.mode_set(mode='OBJECT')
+    if bpy.context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
     if bpy.app.version >= (4, 3, 0):
-        bpy.ops.object.grease_pencil_add(type='EMPTY')
+        bpy.ops.object.grease_pencil_add(type="EMPTY")
     else:
-        bpy.ops.object.gpencil_add(type='EMPTY')
+        bpy.ops.object.gpencil_add(type="EMPTY")
     bpy.context.object.name = "AI Sketch Reference"
-    mode = 'PAINT_GREASE_PENCIL' if bpy.app.version >= (4, 3, 0) else 'PAINT_GPENCIL'
+    mode = "PAINT_GREASE_PENCIL" if bpy.app.version >= (4, 3, 0) else "PAINT_GPENCIL"
     bpy.ops.object.mode_set(mode=mode)
     return bpy.context.object

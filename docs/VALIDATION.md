@@ -1,72 +1,66 @@
-# Local validation evidence
+# Reproducible validation: 3.2.0
 
-Version under validation: **3.1.0**. Original repository baseline: `3e0e01f`.
-Working branch: `codex/studio-refactor`. Local refactor; no GitHub publication.
+Original baseline: `3e0e01f`. First published candidate: `207cfc8`. The initial
+GitHub failure was seven Blender 3.6 material-preset fallbacks raising `NameError`
+for an unavailable `KeyError`. The regression test now explicitly exercises that
+fallback on every version, and the preset suite still exercises the actual nodes.
 
-## Environment
+## Run all checks
 
-- Windows, Blender **5.1.1**, build `b70da489d7f4`.
-- Executable: `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`.
-- Bundled Python 3.13: `C:\Program Files\Blender Foundation\Blender 5.1\5.1\python\bin\python.exe`.
-- SQLite 3.50.4 available in Blender's bundled Python; no runtime third-party packages.
-- The machine's unrelated Python 3.12 installation lacks `_sqlite3`; tests use Blender's bundled interpreter.
+Use a Python installation that includes SQLite. On the development Windows host,
+Blender 5.1's bundled Python works; the unrelated system Python lacks `_sqlite3`.
 
-## Checks
-
-Final results are recorded in `artifacts/validation/final-results.json` and the associated logs.
-The completed local suites contain **53 pure/protocol/package tests** and **33 real
-Blender integration tests**. The final result file also records lint, manifest,
-installation and Python 3.10 syntax checks, with installer hashes.
-Run this validation from the repository root with a normal Python including SQLite:
-
-```text
-python -m unittest discover -s tests -p test_*.py -v
-blender --background --factory-startup --python-exit-code 1 --python tests/blender_integration.py
-python tools/build.py
-blender --background --factory-startup --command extension validate dist/ai-in-blender-3.1.0-extension.zip
+```sh
+python -m pip install ruff==0.16.7
+ruff check ai_modeling_assistant tests tools
+python -m unittest discover -s tests -p 'test_*.py' -v
+python tools/validate_blender.py --blender /absolute/path/to/blender
 ```
 
-Pure tests cover guarded code, bounded context, source-backed memory, scope isolation,
-conflicts, optimistic revision updates, expiry, forgetting/backup, immutable attachments,
-real HTTP subprocesses, conditioned upload, cancellation, errors and package layout.
+`validate_blender.py` builds both ZIPs, runs the source integration suite, installs
+the legacy ZIP, installs and exercises the actual extension namespace on Blender
+4.2+, and validates the manifest. It creates isolated configuration, scripts and
+extensions under `artifacts/validation/install-<id>`. Its `checks.json` records each
+exit code and log. The integration suite writes `blender-<version>.json` with test
+counts, exceptions and success. A failing test or installation fails the command.
 
-The Blender suite covers the 16 quick builds, 30 material presets, every panel draw,
-legacy key migration, provider routing, four export formats, safe code failure,
-planning through export, bounded repair, real media imports and UI registration.
-Platform cases cover persistent multi-turn dialogue, actual model-based compression,
-parallel part assembly, two simultaneous workflows, retained successful checkpoints,
-human edit conflicts, edit-mode deferral, out-of-region edits, native bounds/anchor
-gates, process deadlines, Grease Pencil creation, image-backed review and invalidation
-of visual approval after an edit. Model responses come from a loopback fixture server.
+## CI matrix and evidence
 
-Legacy and extension installation tests run against project-local isolated Blender
-configuration/scripts/extension directories under `artifacts/`; they do not change the
-user's normal installation. The extension smoke test also exercises its packaged HTTP
-worker and isolated scene worker from the actual installed extension namespace.
+- Core: Windows and Ubuntu, Python 3.10 and 3.13, pinned Ruff.
+- Blender: Linux 3.6.23, 4.2.0, 4.5.3 and 5.1.1; verified official download hashes.
+- Legacy installation: every Blender matrix entry.
+- Real extension installation and packaged workers: 4.2.0, 4.5.3 and 5.1.1.
+- Host validation: Windows Blender 5.1.1, build `b70da489d7f4`.
 
-## Inspectable artifacts
+Use [Actions](https://github.com/hxjyaohaohaode/AI-In-Blender/actions) for the result
+of a specific commit. Matrix logs and package archives are uploaded as artifacts.
+The final local audit is `artifacts/validation/final-results.json`; ignored artifacts
+are not source-controlled. A matrix definition by itself is not a pass certificate.
 
-- `dist/ai-in-blender-3.1.0-extension.zip`, `dist/ai-in-blender-3.1.0-legacy.zip`.
-- `dist/SHA256SUMS.txt` contains deterministic package checksums.
-- `artifacts/demo/HELIO.blend`, `HELIO.glb`, `HELIO.png`, `run.json`: real procedural
-  scene, materials, armature-driven animation, rendered preview and export.
-- `artifacts/validation/`: unit, host integration, install and manifest validation logs.
-- `artifacts/extension-smoke-3.1/runs/`: actual installed-extension branch output and preview.
+## Failure cases covered
 
-The HELIO example is an offline procedural asset, not the output of a paid AI service.
-The test server is not a production model bridge.
+- Guarded imports, exception fallbacks, timeout, cancellation and secret redaction.
+- Real multi-turn history, Chinese budget pressure, complete-turn source coverage,
+  image/output reservations and explicit omission reporting.
+- Memory isolation, scope precedence, candidate authority, conflict resolution,
+  revision races, evidence consolidation, expiry, suppression after forgetting,
+  historical episode retrieval and project erasure.
+- Dependency errors, contradictory bounds, independent branch failure, retained
+  successful steps, derived-result invalidation and remote GET-only recovery.
+- All quick builds and material presets, panel/operator registration, four export
+  formats, actual image/video/audio/model imports and import compensation.
+- Evaluated modifier geometry, required-object contracts, inherited export gates,
+  asset tampering, frame/unit conflicts, weights/attributes, scoped UV edits,
+  explicit external object dependencies and stale visual approval.
+- Parallel parts, separate workflows, bounded repair followed by independent
+  re-review, persistent call budgets, scene process deadlines and checkpoint recovery.
+- Reproducible package layouts and actual installed-worker execution.
 
-## What these results do not establish
+## Limits of this evidence
 
-Blender 3.6/4.x code paths and a Linux matrix are provided but have not been executed
-locally. Attempts to fetch older releases failed; no cross-version pass is claimed.
-The CI workflow is not run until the repository is published/executed on GitHub.
-Grease Pencil object creation is tested in Blender; actual interactive drawing and
-OpenGL viewport screenshot experience are not tested by the headless suite.
-
-No live paid LLM, Meshy, video, voice or world service was invoked. Actual credentials,
-provider availability and generation quality need service-level validation. Bridge v2
-requires a real adapter implementation for the chosen model. Automated checks establish
-specified structural invariants and workflow behavior, not universal expert artistry.
-Complex Geometry Nodes/external image/driver changes are not claimed perfectly
-fingerprinted. The process boundary is not an operating-system security sandbox.
+Local HTTP fixtures exercise network protocols and byte transfers; they do not
+measure paid model availability or generated artistic quality. Rendering evidence
+is Workbench geometry, not final PBR/animation quality. Interactive drawing/capture
+needs manual GUI verification. macOS and unlisted Blender versions are not claimed
+tested. The process boundary is not an OS security sandbox. See
+[workflow contracts](WORKFLOW_LIFECYCLES.md) for recovery limits and invariants.

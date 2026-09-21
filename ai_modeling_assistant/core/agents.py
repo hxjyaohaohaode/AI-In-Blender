@@ -1,4 +1,5 @@
 """Expert contracts, dependency graph validation and deterministic task state."""
+
 from dataclasses import dataclass, field, asdict
 import re
 import math
@@ -10,7 +11,11 @@ EXPERTS = {
     "material": ("chat", "Materials", "Create PBR materials, procedural textures and UVs."),
     "rigger": ("chat", "Rigging", "Build an appropriate armature, constraints and weights."),
     "animator": ("chat", "Animation", "Create usable keyframes, actions and a sensible timeline."),
-    "reviewer": ("chat", "Creative review", "Review the supplied scene facts against the goal. Return JSON with passed (boolean), summary (string), issues (array of strings). Do not claim visual inspection unless images were supplied."),
+    "reviewer": (
+        "chat",
+        "Creative review",
+        "Review the supplied scene facts against the goal. Return JSON with passed (boolean), summary (string), issues (array of strings). Do not claim visual inspection unless images were supplied.",
+    ),
     "model3d": ("model3d", "3D generation", "Generate a 3D asset from the prompt."),
     "image": ("image", "Image / texture", "Generate an image or texture reference."),
     "video": ("video", "Video", "Generate a video clip."),
@@ -60,7 +65,9 @@ class Workflow:
                 raise ValueError("Each task must be an object")
             ident, expert, prompt = item.get("id"), item.get("expert"), item.get("prompt")
             deps = item.get("depends_on", [])
-            if not isinstance(ident, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,47}", ident):
+            if not isinstance(ident, str) or not re.fullmatch(
+                r"[a-zA-Z][a-zA-Z0-9_-]{0,47}", ident
+            ):
                 raise ValueError("Task IDs must be short alphanumeric identifiers")
             if expert not in EXPERTS:
                 raise ValueError(f"Unknown expert: {expert}")
@@ -68,34 +75,96 @@ class Workflow:
                 raise ValueError(f"Task {ident} needs a prompt of at most 20000 characters")
             if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
                 raise ValueError(f"Invalid dependencies for {ident}")
-            contract = item.get('contract', {})
+            contract = item.get("contract", {})
             if not isinstance(contract, dict):
-                raise ValueError('Task contract must be an object')
-            allowed = {'part_id', 'require_geometry', 'closed_mesh', 'require_materials', 'require_uv',
-                       'min_vertices', 'max_vertices', 'max_extent', 'required_objects',
-                       'bounds_min','bounds_max','anchor_object','anchor_position','anchor_tolerance'}
+                raise ValueError("Task contract must be an object")
+            allowed = {
+                "part_id",
+                "require_geometry",
+                "closed_mesh",
+                "require_materials",
+                "require_uv",
+                "min_vertices",
+                "max_vertices",
+                "max_extent",
+                "required_objects",
+                "bounds_min",
+                "bounds_max",
+                "anchor_object",
+                "anchor_position",
+                "anchor_tolerance",
+                "require_rig",
+                "require_animation",
+                "min_faces",
+                "max_faces",
+            }
             if set(contract) - allowed:
-                raise ValueError('Unknown task contract fields')
-            for key in ('require_geometry','closed_mesh','require_materials','require_uv'):
+                raise ValueError("Unknown task contract fields")
+            for key in (
+                "require_geometry",
+                "closed_mesh",
+                "require_materials",
+                "require_uv",
+                "require_rig",
+                "require_animation",
+            ):
                 if key in contract and type(contract[key]) is not bool:
-                    raise ValueError(key + ' must be a boolean')
-            for key in ('min_vertices','max_vertices','max_extent','anchor_tolerance'):
-                if key in contract and (type(contract[key]) not in {int,float} or not 0 <= contract[key] <= 1e9):
-                    raise ValueError(key + ' is outside the contract limits')
-            for key in ('bounds_min','bounds_max','anchor_position'):
-                if key in contract and (not isinstance(contract[key],list) or len(contract[key]) != 3
-                    or any(type(v) not in {int,float} or not math.isfinite(v) for v in contract[key])):
-                    raise ValueError(key + ' must contain three finite coordinates')
-            if contract.get('min_vertices',0) > contract.get('max_vertices',1e9):
-                raise ValueError('Vertex limits are contradictory')
-            if 'anchor_position' in contract and not isinstance(contract.get('anchor_object'),str):
-                raise ValueError('Anchor position requires a named anchor object')
-            if 'required_objects' in contract and (not isinstance(contract['required_objects'], list)
-                    or len(contract['required_objects']) > 100 or not all(isinstance(n,str) for n in contract['required_objects'])):
-                raise ValueError('required_objects must be a list of names')
-            if 'part_id' in contract and (not isinstance(contract['part_id'], str)
-                    or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,47}', contract['part_id'])):
-                raise ValueError('Invalid assembly part ID')
+                    raise ValueError(key + " must be a boolean")
+            for key in (
+                "min_vertices",
+                "max_vertices",
+                "max_extent",
+                "anchor_tolerance",
+                "min_faces",
+                "max_faces",
+            ):
+                if key in contract and (
+                    type(contract[key]) not in {int, float} or not 0 <= contract[key] <= 1e9
+                ):
+                    raise ValueError(key + " is outside the contract limits")
+                if (
+                    key in contract
+                    and key in {"min_vertices", "max_vertices", "min_faces", "max_faces"}
+                    and type(contract[key]) is not int
+                ):
+                    raise ValueError(key + " must be an integer")
+            for key in ("bounds_min", "bounds_max", "anchor_position"):
+                if key in contract and (
+                    not isinstance(contract[key], list)
+                    or len(contract[key]) != 3
+                    or any(
+                        type(v) not in {int, float} or not math.isfinite(v) for v in contract[key]
+                    )
+                ):
+                    raise ValueError(key + " must contain three finite coordinates")
+            if contract.get("min_vertices", 0) > contract.get("max_vertices", 1e9):
+                raise ValueError("Vertex limits are contradictory")
+            if contract.get("min_faces", 0) > contract.get("max_faces", 1e9):
+                raise ValueError("Face limits are contradictory")
+            if (
+                "bounds_min" in contract
+                and "bounds_max" in contract
+                and any(a > b for a, b in zip(contract["bounds_min"], contract["bounds_max"]))
+            ):
+                raise ValueError("Assembly bounds are contradictory")
+            if ("anchor_position" in contract) != ("anchor_object" in contract):
+                raise ValueError("Anchor object and position must be specified together")
+            if "anchor_object" in contract and (
+                not isinstance(contract["anchor_object"], str)
+                or not contract["anchor_object"].strip()
+            ):
+                raise ValueError("Anchor position requires a named anchor object")
+            if "required_objects" in contract and (
+                not isinstance(contract["required_objects"], list)
+                or len(contract["required_objects"]) > 100
+                or not all(isinstance(n, str) for n in contract["required_objects"])
+            ):
+                raise ValueError("required_objects must be a list of names")
+            if "part_id" in contract and (
+                not isinstance(contract["part_id"], str)
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,47}", contract["part_id"])
+            ):
+                raise ValueError("Invalid assembly part ID")
             tasks.append(Task(ident, expert, prompt, list(dict.fromkeys(deps)), contract=contract))
         ids = [t.id for t in tasks]
         if len(set(ids)) != len(ids):
@@ -108,9 +177,9 @@ class Workflow:
             if not ready:
                 raise ValueError("Plan contains a dependency cycle")
             resolved.update(ready)
-        assembly = data.get('assembly', {})
+        assembly = data.get("assembly", {})
         if not isinstance(assembly, dict) or len(str(assembly)) > 16000:
-            raise ValueError('Assembly specification must be a bounded JSON object')
+            raise ValueError("Assembly specification must be a bounded JSON object")
         return cls(goal, tasks, assembly=assembly)
 
     @classmethod
@@ -121,8 +190,6 @@ class Workflow:
         return next(t for t in self.tasks if t.id == ident)
 
     def ready(self):
-        if any(t.status in {"running", "failed", "cancelled"} for t in self.tasks):
-            return []
         done = {t.id for t in self.tasks if t.status == "succeeded"}
         return [t for t in self.tasks if t.status == "queued" and set(t.depends_on) <= done]
 
@@ -140,6 +207,8 @@ class Workflow:
         task.result = result or {}
 
     def fail(self, task, error):
+        if task not in self.tasks or task.status not in {"running", "queued"}:
+            raise ValueError("Only an owned pending or running task can fail")
         task.status, task.error = "failed", str(error)
         blocked = {task.id}
         changed = True
@@ -163,32 +232,63 @@ class Workflow:
             if task.status in {"failed", "blocked", "cancelled"}:
                 task.status, task.error = "queued", ""
 
+    def ancestors(self, task):
+        found = set()
+        pending = list(task.depends_on)
+        while pending:
+            ident = pending.pop()
+            if ident not in found:
+                found.add(ident)
+                pending.extend(self.get(ident).depends_on)
+        return [t for t in self.tasks if t.id in found]
+
+    def invalidate(self, ident, reason):
+        """Explicit replanning never reuses outputs that depended on a changed task."""
+        if any(t.status == "running" for t in self.tasks):
+            raise ValueError("Stop execution before revising a task")
+        affected = {ident}
+        affected.update(t.id for t in self.tasks if ident in {a.id for a in self.ancestors(t)})
+        for task in self.tasks:
+            if task.id in affected:
+                task.status, task.result, task.error = "queued", {}, str(reason)
+        return affected
+
     @property
     def complete(self):
         return all(t.status == "succeeded" for t in self.tasks)
 
     def snapshot(self):
-        return {"schema_version": 1, "goal": self.goal, "created_at": self.created_at,
-                "complete": self.complete, "assembly": self.assembly, "tasks": [asdict(t) for t in self.tasks]}
+        return {
+            "schema_version": 1,
+            "goal": self.goal,
+            "created_at": self.created_at,
+            "complete": self.complete,
+            "assembly": self.assembly,
+            "tasks": [asdict(t) for t in self.tasks],
+        }
 
 
 def planner_prompt(capabilities):
-    available = {key: {"capability": value[0], "purpose": value[2]}
-                 for key, value in EXPERTS.items()
-                 if value[0] in set(capabilities) | {"builtin"}}
-    return ("You are the production planner of a Blender expert team. Return ONLY JSON: "
-            '{"tasks":[{"id":"model","expert":"modeler","prompt":"...","depends_on":[]}]}. '
-            "Use 1-24 tasks, unique IDs, explicit dependencies. Include an assembly object describing "
-            "units, axes, overall dimensions, named part interfaces/anchors and tolerances. "
-            "Each task may include contract: {part_id: short unique part ID for independently built parts, "
-            "require_geometry: true, closed_mesh: false, require_materials: false, require_uv: false, "
-            "min_vertices: 0, max_vertices: 1000000, max_extent: 1000, required_objects: []}. "
-            "Contracts can also specify bounds_min and bounds_max as [x,y,z] workspace limits, "
-            "and anchor_object, anchor_position [x,y,z], anchor_tolerance for checked assembly interfaces. "
-            "Independent root parts with different part_id can run concurrently; all other scene changes "
-            "are ordered. Contract dimensions are in Blender scene units. For 3D workflows include an inspector after geometry and before an exporter. For "
-            "media-only workflows the generated media file is the output; do not add a GLB exporter. Include "
-            "reviewer after final creative changes. Only include rigging/animation/video/audio "
-            "when the user requests them. Do not invent unavailable capabilities. Prompts "
-            "must describe concrete outputs and build on earlier results. Available experts: "
-            + str(available))
+    available = {
+        key: {"capability": value[0], "purpose": value[2]}
+        for key, value in EXPERTS.items()
+        if value[0] in set(capabilities) | {"builtin"}
+    }
+    return (
+        "You are the production planner of a Blender expert team. Return ONLY JSON: "
+        '{"tasks":[{"id":"model","expert":"modeler","prompt":"...","depends_on":[]}]}. '
+        "Use 1-24 tasks, unique IDs, explicit dependencies. Include an assembly object describing "
+        "units, axes, overall dimensions, named part interfaces/anchors and tolerances. "
+        "Each task may include contract: {part_id: short unique part ID for independently built parts, "
+        "require_geometry: true, closed_mesh: false, require_materials: false, require_uv: false, "
+        "min_vertices: 0, max_vertices: 1000000, max_extent: 1000, required_objects: []}. "
+        "Contracts can also specify bounds_min and bounds_max as [x,y,z] workspace limits, "
+        "and anchor_object, anchor_position [x,y,z], anchor_tolerance for checked assembly interfaces. "
+        "Independent root parts with different part_id can run concurrently; all other scene changes "
+        "are ordered. Contract dimensions are in Blender scene units. For 3D workflows include an inspector after geometry and before an exporter. For "
+        "media-only workflows the generated media file is the output; do not add a GLB exporter. Include "
+        "reviewer after final creative changes. Only include rigging/animation/video/audio "
+        "when the user requests them. Do not invent unavailable capabilities. Prompts "
+        "must describe concrete outputs and build on earlier results. Available experts: "
+        + str(available)
+    )

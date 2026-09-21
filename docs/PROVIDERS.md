@@ -1,5 +1,15 @@
 # Model provider contracts
 
+Version 3.2: conversation, planner and code/review experts require a Chat Completions
+profile so role-separated messages and actual images retain their meaning. Bridge
+profiles handle media experts. Known remote job IDs are persisted and resumed via
+GET; ambiguous submissions cannot be replayed automatically. See
+[workflow lifecycle and recovery](WORKFLOW_LIFECYCLES.md).
+
+`context_window` reserves room for output tokens. `vision_tokens_per_image` defaults
+to 4096 and can be adjusted to the provider's documented accounting (256–65536).
+The host budgets maintenance, planning, repair and review as well as conversation.
+
 ## Routing and configuration
 
 Each enabled provider defines a protocol, base URL, model ID, capabilities, optional

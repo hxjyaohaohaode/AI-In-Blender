@@ -1,14 +1,14 @@
-# Agent Platform 3.1 使用指南
+# Agent Platform 3.2 使用指南
 
 ## 安装与第一条完整工作流
 
-Blender 4.2+ 选择 `dist/ai-in-blender-3.1.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。本机已实测 Windows / Blender 5.1.1；其他版本见验证记录。
+Blender 4.2+ 选择 `dist/ai-in-blender-3.2.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。本机已实测 Windows / Blender 5.1.1；其他版本见验证记录。
 
 1. 在 Models & Settings 中添加 Chat Completions 模型，填写实际 Base URL、模型 ID 和密钥环境变量；密钥输入框只在当前会话保留。给不同提供商分配 planner、conversation、modeler、material、rigger、animator、reviewer 等角色。Vision 只有确实支持图片的模型才能启用。
 2. 在 Conversation & Memory 中讨论目标，例如“做一个适合游戏引擎的机械无人机，左右旋翼为独立部件，保留可动画的接口”。继续补充“总宽 1.2 米、两侧锚点分别在 X=±0.45 米”，真实原文会逐条保存。
 3. 点击 **Plan from Conversation**。规划会读取当前会话、已确认记忆、场景事实与附件。检查任务依赖、装配说明和合同，必要时用 Edit Plan 调整 JSON。
 4. Run 执行；默认每份脚本先显示代码，Apply Code 才开始隔离分支。独立根部件有不同 `part_id` 时并行；公共材质、绑定、动画、装配、导出步骤串行。
-5. 查看实时任务状态、Read Run Report 与 View Latest Preview。通过结构门后，导出默认停在人工视觉验收。检视当前场景，再点击 Approve Visual Quality；如果对象在检查后变化，旧批准失效。
+5. 查看实时任务状态、Read Run Report 与 View Latest Preview；Reverse / Top 可以查看背面和顶面。通过结构门后，导出默认停在人工视觉验收。检视当前场景，再点击 Approve Visual Quality；如果对象在检查后变化，旧批准失效。
 
 **聊天回复本身不会编辑场景**。按照讨论启动计划后，生产任务才会调用生成工具。这让讨论、修订和实际修改有明确边界。关闭逐份代码审阅或人工视觉批准是显式的产品设置；原生结构检查始终执行。
 
@@ -37,7 +37,7 @@ Generate Candidates 与 Use Verified Memory 分开：可以停用额外提取调
 
 达到输入预算阈值时，自动摘要生成目标、约束、决定、进展、未决问题和资产引用，逐条引用来源 turn ID。只压缩模型本次需要读取的上下文，不删除数据库里的原始消息。摘要失败会保存有明确模式标记的抽取式检查点。
 
-对话大模型并不能把任意长历史全塞进一次请求。Context Budget 控制估算输入量；模型 options 中可设置实际 `context_window`，插件扣除输出 token 配额与余量。估算不是该模型的精确 tokenizer。当前用户消息装不下时直接报告，不静默截断。压缩和记忆提取会各消耗一次真实模型调用，可单独关闭。
+对话大模型并不能把任意长历史全塞进一次请求。Context Budget 控制估算输入量；模型 options 中可设置实际 `context_window`，插件扣除输出 token 配额与余量。估算不是该模型的精确 tokenizer。当前用户消息装不下时直接报告，不静默截断。压缩按完整原文分批，每轮最多三次模型调用；记忆提取另有一次调用，两者可分别关闭。图片输入通过 `vision_tokens_per_image` 预留预算，实际遗漏的历史会在审计和模型上下文中明确提示。
 
 生产工作流有最大调用次数、每步修复次数和并发数上限。取消会终止本地 HTTP/Blender 进程；已提交远端任务的运行及计费由供应商控制。
 
@@ -76,7 +76,7 @@ Vision reviewer 使用真实 Workbench 图像看形状、比例与构图；该�
 
 ## 重试、恢复与主动建议
 
-普通失败用 Retry Unfinished Tasks，成功节点不重做。需要冷启动恢复时，先打开保存过的 `.blend`，选择对应 run.json，再点击 Resume Saved Checkpoint。对象内容必须与检查点匹配、成功产物必须仍存在；否则拒绝恢复，防止重复生成或覆盖人工工作。不自动重发可能已经计费的请求。
+普通失败用 Retry Unfinished Tasks，成功节点不重做。需要冷启动恢复时，先打开保存过的 `.blend`，选择对应 run.json，再点击 Resume Saved Checkpoint。对象内容和集合成员必须与检查点匹配，成功产物的 SHA-256 必须相同；否则拒绝恢复。并行子任务在请求前同步主检查点，调用数和修复次数不会因重试清零。已知 Bridge / Meshy 任务 ID 通过 GET 查询继续；没有可信 ID 的超时提交明确阻止重发，请根据报告中的 remote-job.json 检查供应商记录。
 
 场景变化后，本地建议定期检查所选对象的材料/UV、记忆冲突和待批准质量门。Check Next Actions 执行更详细的原生检查。这些主动功能不调用付费模型、不自行上传资产，也不自动修改场景。
 

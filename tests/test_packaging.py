@@ -14,10 +14,16 @@ class PackagingTests(unittest.TestCase):
             for path in outputs:
                 with zipfile.ZipFile(path) as archive:
                     names = archive.namelist()
-                    self.assertFalse(any('__pycache__' in n or '.env' in n or 'tests/' in n for n in names))
-                    prefix = 'ai_modeling_assistant/' if 'legacy' in path.name else ''
-                    self.assertIn(prefix + '__init__.py', names)
-                    self.assertIn(prefix + 'worker.py', names)
-                    self.assertEqual('blender_manifest.toml' in names, 'extension' in path.name)
-            self.assertEqual(hashes, [hashlib.sha256(p.read_bytes()).hexdigest() for p in build(folder)])
-            self.assertTrue((Path(folder) / 'SHA256SUMS.txt').is_file())
+                    self.assertTrue(all(info.create_system == 3 for info in archive.infolist()))
+                    self.assertFalse(
+                        any("__pycache__" in n or ".env" in n or "tests/" in n for n in names)
+                    )
+                    prefix = "ai_modeling_assistant/" if "legacy" in path.name else ""
+                    self.assertIn(prefix + "__init__.py", names)
+                    self.assertIn(prefix + "worker.py", names)
+                    self.assertEqual("blender_manifest.toml" in names, "extension" in path.name)
+            self.assertEqual(
+                hashes, [hashlib.sha256(p.read_bytes()).hexdigest() for p in build(folder)]
+            )
+            self.assertTrue((Path(folder) / "SHA256SUMS.txt").is_file())
+            self.assertNotIn(b"\r", (Path(folder) / "SHA256SUMS.txt").read_bytes())

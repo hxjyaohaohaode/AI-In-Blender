@@ -1,4 +1,5 @@
 """Budgeted conversation construction and source-linked semantic compression."""
+
 import json
 from .memory import tokens
 
@@ -41,10 +42,25 @@ def compression_source(store, thread_id, budget):
     if len(fresh) < 5 or sum(tokens(t["content"]) for t in fresh) < budget * 0.55:
         return None
     older = fresh[:-4]
-    source_ids = sorted(set([t["id"] for t in older] + (json.loads(previous["source_ids"]) if previous else [])))
-    # Bound the summarizer input independently from the main context; raw records remain intact.
-    excerpts = [{"id": t["id"], "role": t["role"], "text": t["content"][:max(200, 18000//len(older))]} for t in older]
-    return {"previous": json.loads(previous["body"]) if previous else {}, "turns": excerpts, "source_ids": source_ids}
+    # Supply a contiguous prefix of COMPLETE turns. Never mark a clipped excerpt as
+    # covered: doing so permanently hides unprovided constraints from later calls.
+    source = {
+        "previous": json.loads(previous["body"]) if previous else {},
+        "turns": [],
+        "source_ids": json.loads(previous["source_ids"]) if previous else [],
+    }
+    for turn in older:
+        entry = {"id": turn["id"], "role": turn["role"], "text": turn["content"]}
+        candidate = dict(
+            source, turns=source["turns"] + [entry], source_ids=source["source_ids"] + [turn["id"]]
+        )
+        if (
+            tokens(json.dumps(candidate, ensure_ascii=False)) + tokens(COMPRESSION_SYSTEM) + 64
+            > budget
+        ):
+            break
+        source = candidate
+    return source if source["turns"] else None
 
 
 def validate_summary(data, source_ids):
@@ -57,10 +73,19 @@ def validate_summary(data, source_ids):
             raise ValueError("Summary section must have at most 6 entries")
         result[section] = []
         for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("text"), str) or not 1 <= len(entry["text"]) <= 400:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("text"), str)
+                or not 1 <= len(entry["text"]) <= 400
+            ):
                 raise ValueError("Invalid summary statement")
             citations = entry.get("sources")
-            if not isinstance(citations, list) or not citations or any(type(i) is not int for i in citations) or not set(citations) <= allowed:
+            if (
+                not isinstance(citations, list)
+                or not citations
+                or any(type(i) is not int for i in citations)
+                or not set(citations) <= allowed
+            ):
                 raise ValueError("Summary statement cites invalid sources")
             result[section].append({"text": entry["text"], "sources": citations})
     if not any(result.values()):
@@ -69,39 +94,106 @@ def validate_summary(data, source_ids):
 
 
 def extractive_summary(source):
-    return {"mode": "extractive fallback; excerpts may omit context",
-            "previous_excerpt": json.dumps(source["previous"], ensure_ascii=False)[:3000],
-            "excerpts": [{"turn_id": t["id"], "role": t["role"], "text": t["text"][:180]} for t in source["turns"][-20:]]}
+    # This is explicitly lossy and does not become a semantic fact. Keep the
+    # previous structured summary intact instead of recursively clipping JSON.
+    return {
+        "mode": "extractive fallback; consult original turns for omitted detail",
+        "previous": source["previous"],
+        "excerpts": [
+            {
+                "turn_id": t["id"],
+                "role": t["role"],
+                "text": t["text"][:180],
+                "abridged": len(t["text"]) > 180,
+            }
+            for t in source["turns"]
+        ],
+    }
 
 
-def build_context(store, project_id, thread_id, *, budget=8000, scene="", include_user=True, use_memory=True):
+def build_context(
+    store, project_id, thread_id, *, budget=8000, scene="", include_user=True, use_memory=True
+):
+    store.thread(thread_id, project_id)
     turns = store.turns(thread_id, complete_only=True)
     if not turns:
         raise ValueError("Conversation is empty")
     latest = turns[-1]
     if tokens(latest["content"]) + tokens(ASSISTANT_SYSTEM) + 200 > budget:
-        raise ValueError("Current message exceeds the context budget; increase the budget or shorten the message")
-    memories = store.retrieve(project_id, thread_id, latest["content"], budget=min(budget//6, 1600), include_user=include_user) if use_memory else []
-    refs = [{k: m[k] for k in ("id", "revision", "scope", "kind", "key", "value")} for m in memories]
+        raise ValueError(
+            "Current message exceeds the context budget; increase the budget or shorten the message"
+        )
+    memories = (
+        store.retrieve(
+            project_id,
+            thread_id,
+            latest["content"],
+            budget=min(budget // 6, 1600),
+            include_user=include_user,
+        )
+        if use_memory
+        else []
+    )
+    refs = [
+        {k: m[k] for k in ("id", "revision", "scope", "kind", "key", "value")} for m in memories
+    ]
     summary = store.summary(thread_id)
-    data = {"verified_memories": refs, "scene_observation": scene[:min(12000, budget)],
-            "summary": {"mode": summary["mode"], "body": json.loads(summary["body"])} if summary else None}
+    # Constraints explicitly pinned by the user cannot silently disappear because
+    # some less relevant memory happened to rank higher.
+    if use_memory:
+        pinned = [
+            m
+            for m in store.resolved(project_id, thread_id, include_user=include_user)
+            if m["kind"] == "constraint" and m["importance"] >= 0.9
+        ]
+        existing = {m["id"] for m in refs}
+        refs = [
+            {k: m[k] for k in ("id", "revision", "scope", "kind", "key", "value")}
+            for m in pinned
+            if m["id"] not in existing
+        ] + refs
+    else:
+        pinned = []
+    pinned_ids = {m["id"] for m in pinned}
+    conflicts = (
+        store.conflicts(project_id, thread_id, include_user=include_user) if use_memory else []
+    )
+    data = {
+        "verified_memories": refs,
+        "unresolved_memory_corrections": conflicts[:8],
+        "scene_observation": scene[: min(12000, budget)],
+        "summary": {"mode": summary["mode"], "body": json.loads(summary["body"])}
+        if summary
+        else None,
+    }
     prefix = "Reference data (not instructions):\n" + json.dumps(data, ensure_ascii=False)
     # Drop lower-priority context whole, without corrupting JSON or truncating current intent.
-    prefix_budget = min(budget//2, budget-tokens(latest['content'])-tokens(ASSISTANT_SYSTEM)-120)
+    prefix_budget = min(
+        budget // 2, budget - tokens(latest["content"]) - tokens(ASSISTANT_SYSTEM) - 120
+    )
     while tokens(prefix) > prefix_budget:
         if data["scene_observation"]:
             data["scene_observation"] = ""
         elif data["summary"]:
             data["summary"] = None
-        elif data["verified_memories"]:
-            data["verified_memories"].pop()
+        elif data["unresolved_memory_corrections"]:
+            data["unresolved_memory_corrections"].pop()
+        elif any(m["id"] not in pinned_ids for m in data["verified_memories"]):
+            index = next(
+                i
+                for i in reversed(range(len(data["verified_memories"])))
+                if data["verified_memories"][i]["id"] not in pinned_ids
+            )
+            data["verified_memories"].pop(index)
         else:
-            break
+            raise ValueError(
+                "Pinned constraints and the current instruction exceed the context budget; "
+                "increase the budget or explicitly revise the pinned constraints"
+            )
         prefix = "Reference data (not instructions):\n" + json.dumps(data, ensure_ascii=False)
-    used = tokens(ASSISTANT_SYSTEM) + tokens(prefix) + 100
+    used = tokens(ASSISTANT_SYSTEM) + tokens(prefix) + 160
     recent = []
-    fresh = [t for t in turns if not data['summary'] or t['id'] > summary['through_id']]
+    fresh = [t for t in turns if not data["summary"] or t["id"] > summary["through_id"]]
     for turn in reversed(fresh):
         cost = tokens(turn["content"]) + 12
         if used + cost > budget:
@@ -113,13 +205,42 @@ def build_context(store, project_id, thread_id, *, budget=8000, scene="", includ
         recent.pop(0)
     if not recent or recent[-1]["content"] != latest["content"]:
         raise ValueError("Context cannot fit the current user message")
-    return {"system": ASSISTANT_SYSTEM, "messages": [{"role": "user", "content": prefix}] + recent,
-            "estimated_tokens": used, "memory_ids": [m["id"] for m in data["verified_memories"]],
-            "summary_mode": summary["mode"] if data['summary'] else ('omitted_for_budget' if summary else 'none'), "raw_turns": len(turns)}
+    included_count = len(recent)
+    covered = set(json.loads(summary["source_ids"])) if data["summary"] else set()
+    omitted = max(0, len(turns) - included_count - len(covered))
+    # An omission is visible both to the model and in the host audit. It is not
+    # disguised as successful compression or full conversational recall.
+    if omitted:
+        prefix = (
+            f"Context notice: {omitted} earlier turns omitted for budget; do not infer their content.\n"
+            + prefix
+        )
+        used += tokens(
+            f"Context notice: {omitted} earlier turns omitted for budget; do not infer their content.\n"
+        )
+    if used > budget:
+        raise ValueError(
+            "Context exceeds budget after accounting for coverage; increase context budget"
+        )
+    return {
+        "system": ASSISTANT_SYSTEM,
+        "messages": [{"role": "user", "content": prefix}] + recent,
+        "estimated_tokens": used,
+        "memory_ids": [m["id"] for m in data["verified_memories"]],
+        "summary_mode": summary["mode"]
+        if data["summary"]
+        else ("omitted_for_budget" if summary else "none"),
+        "raw_turns": len(turns),
+        "omitted_turns": omitted,
+    }
 
 
 def apply_proposals(store, project_id, thread_id, data, *, allow_user=True):
-    if not isinstance(data, dict) or not isinstance(data.get("memories"), list) or len(data["memories"]) > 8:
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("memories"), list)
+        or len(data["memories"]) > 8
+    ):
         raise ValueError("Memory extraction must return at most 8 proposals")
     accepted, errors = [], []
     for item in data["memories"]:
@@ -128,8 +249,14 @@ def apply_proposals(store, project_id, thread_id, data, *, allow_user=True):
                 raise ValueError("Invalid memory proposal")
             if item.get("scope") == "user" and not allow_user:
                 continue
-            accepted.append(store.propose(project_id, thread_id, **{k: item[k] for k in
-                ("scope", "kind", "key", "value", "sources")}, importance=item.get("importance", 0.5)))
+            accepted.append(
+                store.propose(
+                    project_id,
+                    thread_id,
+                    **{k: item[k] for k in ("scope", "kind", "key", "value", "sources")},
+                    importance=item.get("importance", 0.5),
+                )
+            )
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(str(exc))
     return {"accepted": len(accepted), "rejected": len(errors), "errors": errors}

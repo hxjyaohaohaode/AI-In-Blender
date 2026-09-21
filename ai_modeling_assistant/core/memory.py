@@ -3,20 +3,25 @@
 Models propose candidates. Only explicit user review promotes durable facts.
 Scopes are enforced before ranking; old revisions never silently win a race.
 """
+
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sqlite3
 import time
 import uuid
+import unicodedata
 
 SCOPES = {"session", "project", "user"}
 KINDS = {"preference", "constraint", "decision", "fact", "procedure", "open_question"}
 STATUSES = {"candidate", "verified", "conflict", "superseded", "rejected"}
-SECRET = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{12,})|"
-                    r"(?i:api[_ -]?key|password|secret)\s*[:=]\s*[^\s,;]{6,}")
+SECRET = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{12,})|"
+    r"(?i:api[_ -]?key|password|secret)\s*[:=]\s*[^\s,;]{6,}"
+)
 
 
 def clean(text, maximum=32000):
@@ -28,7 +33,7 @@ def clean(text, maximum=32000):
 def terms(text):
     result = set(re.findall(r"[a-z0-9_]{2,}", text.lower()))
     for run in re.findall(r"[\u3400-\u9fff]+", text):
-        result.update(run[i:i+2] for i in range(max(1, len(run)-1)))
+        result.update(run[i : i + 2] for i in range(max(1, len(run) - 1)))
     return result
 
 
@@ -47,13 +52,16 @@ class MemoryStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=5, isolation_level=None)
         self.db.row_factory = sqlite3.Row
-        if self.db.execute('PRAGMA user_version').fetchone()[0] > 1:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] > 2:
             self.db.close()
-            raise ValueError('Memory database was created by a newer add-on; refusing to downgrade it')
+            raise ValueError(
+                "Memory database was created by a newer add-on; refusing to downgrade it"
+            )
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA secure_delete=ON")
         self.db.executescript("""
+        BEGIN IMMEDIATE;
         CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, user_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS turns(id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL REFERENCES threads(id), role TEXT NOT NULL, content TEXT NOT NULL, created REAL NOT NULL, state TEXT NOT NULL, metadata TEXT NOT NULL);
@@ -63,7 +71,11 @@ class MemoryStore:
         CREATE INDEX IF NOT EXISTS memory_scope ON memories(scope,owner,status);
         CREATE TABLE IF NOT EXISTS memory_versions(memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, revision INTEGER NOT NULL, snapshot TEXT NOT NULL, reason TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(memory_id,revision));
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, data TEXT NOT NULL, created REAL NOT NULL);
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS memory_blocks(scope TEXT NOT NULL, owner TEXT NOT NULL, key TEXT NOT NULL, digest TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(scope,owner,key,digest));
+        CREATE TABLE IF NOT EXISTS episodes(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT NOT NULL, task_id TEXT NOT NULL, goal TEXT NOT NULL, outcome TEXT NOT NULL, evidence TEXT NOT NULL, attempts INTEGER NOT NULL, updated REAL NOT NULL, UNIQUE(project_id,run_id,task_id));
+        CREATE INDEX IF NOT EXISTS episodes_project ON episodes(project_id,updated);
+        PRAGMA user_version=2;
+        COMMIT;
         """)
 
     def close(self):
@@ -91,16 +103,25 @@ class MemoryStore:
         old = self.db.execute("SELECT * FROM projects WHERE id=?", (ident,)).fetchone()
         if old and old["user_id"] != user_id:
             raise ValueError("Project belongs to a different local user profile")
-        self.db.execute("INSERT OR IGNORE INTO projects VALUES(?,?,?)", (ident, name[:200], user_id))
+        self.db.execute(
+            "INSERT OR IGNORE INTO projects VALUES(?,?,?)", (ident, name[:200], user_id)
+        )
         return ident
 
     def new_thread(self, project_id, title="New conversation"):
         ident = uuid.uuid4().hex
-        self.db.execute("INSERT INTO threads VALUES(?,?,?,?)", (ident, project_id, title[:200], time.time()))
+        self.db.execute(
+            "INSERT INTO threads VALUES(?,?,?,?)", (ident, project_id, title[:200], time.time())
+        )
         return ident
 
-    def projects(self, user_id='local'):
-        return [dict(r) for r in self.db.execute('SELECT * FROM projects WHERE user_id=? ORDER BY rowid DESC',(user_id,))]
+    def projects(self, user_id="local"):
+        return [
+            dict(r)
+            for r in self.db.execute(
+                "SELECT * FROM projects WHERE user_id=? ORDER BY rowid DESC", (user_id,)
+            )
+        ]
 
     def thread(self, ident, project_id=None):
         row = self.db.execute("SELECT * FROM threads WHERE id=?", (ident,)).fetchone()
@@ -109,35 +130,63 @@ class MemoryStore:
         return dict(row)
 
     def threads(self, project_id):
-        return [dict(r) for r in self.db.execute("SELECT * FROM threads WHERE project_id=? ORDER BY created DESC", (project_id,))]
+        return [
+            dict(r)
+            for r in self.db.execute(
+                "SELECT * FROM threads WHERE project_id=? ORDER BY created DESC", (project_id,)
+            )
+        ]
 
     def append(self, thread_id, role, content, *, state="complete", metadata=None):
         self.thread(thread_id)
-        if role not in {"user", "assistant", "tool"} or state not in {"complete", "failed", "pending"}:
+        if role not in {"user", "assistant", "tool"} or state not in {
+            "complete",
+            "failed",
+            "pending",
+        }:
             raise ValueError("Invalid conversation role/state")
         content = clean(content, 250000)
-        ident = self.db.execute("INSERT INTO turns(thread_id,role,content,created,state,metadata) VALUES(?,?,?,?,?,?)",
-            (thread_id, role, content, time.time(), state, json.dumps(metadata or {}, ensure_ascii=False))).lastrowid
-        if role == 'user':
-            self.db.execute("UPDATE threads SET title=? WHERE id=? AND title='New conversation'",(' '.join(content.split())[:100],thread_id))
+        ident = self.db.execute(
+            "INSERT INTO turns(thread_id,role,content,created,state,metadata) VALUES(?,?,?,?,?,?)",
+            (
+                thread_id,
+                role,
+                content,
+                time.time(),
+                state,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        ).lastrowid
+        if role == "user":
+            self.db.execute(
+                "UPDATE threads SET title=? WHERE id=? AND title='New conversation'",
+                (" ".join(content.split())[:100], thread_id),
+            )
         return ident
 
     def turns(self, thread_id, *, after=0, limit=10000, complete_only=False):
         query = "SELECT * FROM turns WHERE thread_id=? AND id>?"
         if complete_only:
             query += " AND state='complete'"
-        rows = self.db.execute(query + " ORDER BY id DESC LIMIT ?", (thread_id, after, limit if limit is not None else -1))
+        rows = self.db.execute(
+            query + " ORDER BY id DESC LIMIT ?",
+            (thread_id, after, limit if limit is not None else -1),
+        )
         return list(reversed([dict(r) for r in rows]))
 
     def event(self, project_id, kind, data):
-        self.db.execute("INSERT INTO events(project_id,kind,data,created) VALUES(?,?,?,?)",
-                        (project_id, kind, json.dumps(data, ensure_ascii=False), time.time()))
+        self.db.execute(
+            "INSERT INTO events(project_id,kind,data,created) VALUES(?,?,?,?)",
+            (project_id, kind, json.dumps(data, ensure_ascii=False), time.time()),
+        )
 
     def _owner(self, scope, project_id, thread_id):
         if scope not in SCOPES:
             raise ValueError("Invalid memory scope")
         self.thread(thread_id, project_id)
-        user = self.db.execute("SELECT user_id FROM projects WHERE id=?", (project_id,)).fetchone()[0]
+        user = self.db.execute("SELECT user_id FROM projects WHERE id=?", (project_id,)).fetchone()[
+            0
+        ]
         return {"session": thread_id, "project": project_id, "user": user}[scope]
 
     def _sources(self, sources, project_id, thread_id):
@@ -147,11 +196,27 @@ class MemoryStore:
         for item in sources:
             if not isinstance(item, dict):
                 raise ValueError("Invalid source")
-            row = self.db.execute("SELECT * FROM turns WHERE id=? AND thread_id=?", (item.get("turn_id"), thread_id)).fetchone()
+            row = self.db.execute(
+                "SELECT * FROM turns WHERE id=? AND thread_id=?", (item.get("turn_id"), thread_id)
+            ).fetchone()
             quote = item.get("quote", "")
-            if not row or row["role"] != "user" or not isinstance(quote, str) or len(quote.strip()) < 3 or quote not in row["content"]:
+            if (
+                not row
+                or row["role"] != "user"
+                or row["state"] != "complete"
+                or not isinstance(quote, str)
+                or len(quote.strip()) < 3
+                or quote not in row["content"]
+            ):
                 raise ValueError("Memory evidence must quote a real user turn in this conversation")
-            output.append({"turn_id": row["id"], "thread_id": thread_id, "project_id": project_id, "quote": quote[:4000]})
+            output.append(
+                {
+                    "turn_id": row["id"],
+                    "thread_id": thread_id,
+                    "project_id": project_id,
+                    "quote": quote[:4000],
+                }
+            )
         return output
 
     @staticmethod
@@ -168,55 +233,122 @@ class MemoryStore:
 
     def _version(self, ident, reason):
         item = self.get(ident)
-        self.db.execute("INSERT INTO memory_versions VALUES(?,?,?,?,?)",
-            (ident, item["revision"], json.dumps(item, ensure_ascii=False), reason, time.time()))
+        self.db.execute(
+            "INSERT INTO memory_versions VALUES(?,?,?,?,?)",
+            (ident, item["revision"], json.dumps(item, ensure_ascii=False), reason, time.time()),
+        )
         return item
 
     def propose(self, project_id, thread_id, *, scope, kind, key, value, sources, importance=0.5):
         owner = self._owner(scope, project_id, thread_id)
         if kind not in KINDS:
             raise ValueError("Invalid memory kind")
-        key, value = clean(key, 120).casefold(), clean(value, 4000)
-        if key.startswith('observed:'):
-            raise ValueError('Native observation keys cannot be proposed by a model')
+        key = " ".join(unicodedata.normalize("NFKC", clean(key, 120)).casefold().split())
+        value = clean(value, 4000)
+        if (
+            type(importance) not in {int, float}
+            or not math.isfinite(importance)
+            or not 0 <= importance <= 1
+        ):
+            raise ValueError("Memory importance must be a finite number between 0 and 1")
+        if key.startswith("observed:"):
+            raise ValueError("Native observation keys cannot be proposed by a model")
         sources = self._sources(sources, project_id, thread_id)
         if SECRET.search(value) or "[redacted credential]" in value:
             raise ValueError("Credentials cannot become memories")
         with self.transaction():
-            existing = [self.decode(r) for r in self.db.execute(
-                "SELECT * FROM memories WHERE scope=? AND owner=? AND key=? AND status IN ('verified','candidate','conflict')",
-                (scope, owner, key))]
+            if self.db.execute(
+                "SELECT 1 FROM memory_blocks WHERE scope=? AND owner=? AND key=? AND digest=?",
+                (scope, owner, key, self.value_digest(value)),
+            ).fetchone():
+                raise ValueError(
+                    "This memory was explicitly rejected or forgotten; automatic re-proposal is suppressed"
+                )
+            existing = [
+                self.decode(r)
+                for r in self.db.execute(
+                    "SELECT * FROM memories WHERE scope=? AND owner=? AND key=? AND status IN ('verified','candidate','conflict') AND (expires IS NULL OR expires>?)",
+                    (scope, owner, key, time.time()),
+                )
+            ]
             for item in existing:
                 if item["value"].casefold() == value.casefold():
+                    merged = item["sources"] + [s for s in sources if s not in item["sources"]]
+                    if merged != item["sources"]:
+                        # Confirmation confidence comes from independent evidence,
+                        # not repeated extraction of the very same user turn.
+                        self.db.execute(
+                            "UPDATE memories SET sources=?,revision=revision+1,updated=? WHERE id=?",
+                            (json.dumps(merged[-24:], ensure_ascii=False), time.time(), item["id"]),
+                        )
+                        return self._version(
+                            item["id"], "additional user evidence; authority unchanged"
+                        )
                     return item
             ident, now = uuid.uuid4().hex, time.time()
             status = "conflict" if existing else "candidate"
             expires = now + 86400 if scope == "session" else None
-            self.db.execute("INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ident, scope, owner, kind, key, value, status, 1, json.dumps(sources, ensure_ascii=False),
-                 min(1.0, max(0.0, float(importance))), now, now, expires))
+            self.db.execute(
+                "INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    ident,
+                    scope,
+                    owner,
+                    kind,
+                    key,
+                    value,
+                    status,
+                    1,
+                    json.dumps(sources, ensure_ascii=False),
+                    min(1.0, max(0.0, float(importance))),
+                    now,
+                    now,
+                    expires,
+                ),
+            )
             return self._version(ident, "source-checked model/user proposal")
 
     def observe(self, project_id, key, value, evidence):
         """Called only by the host after native validation, never from model JSON."""
-        if not key.startswith('observed:') or not evidence.get('fingerprint'):
-            raise ValueError('Native observations require a reserved key and verified fingerprint')
-        if not self.db.execute('SELECT id FROM projects WHERE id=?',(project_id,)).fetchone():
-            raise ValueError('Unknown project')
-        value = clean(value,4000)
+        if not key.startswith("observed:") or not evidence.get("fingerprint"):
+            raise ValueError("Native observations require a reserved key and verified fingerprint")
+        if not self.db.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise ValueError("Unknown project")
+        value = clean(value, 4000)
         with self.transaction():
-            row = self.db.execute("SELECT id FROM memories WHERE scope='project' AND owner=? AND key=?",(project_id,key)).fetchone()
-            sources = json.dumps([dict(evidence,kind='native_quality')])
+            row = self.db.execute(
+                "SELECT id FROM memories WHERE scope='project' AND owner=? AND key=?",
+                (project_id, key),
+            ).fetchone()
+            sources = json.dumps([dict(evidence, kind="native_quality")])
             now = time.time()
             if row:
                 ident = row[0]
-                self.db.execute("UPDATE memories SET value=?,sources=?,revision=revision+1,updated=?,status='verified' WHERE id=?",
-                    (value,sources,now,ident))
+                self.db.execute(
+                    "UPDATE memories SET value=?,sources=?,revision=revision+1,updated=?,status='verified' WHERE id=?",
+                    (value, sources, now, ident),
+                )
             else:
                 ident = uuid.uuid4().hex
-                self.db.execute('INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                    (ident,'project',project_id,'fact',key,value,'verified',1,sources,0.4,now,now,None))
-            return self._version(ident,'native structural verification; not aesthetic judgement')
+                self.db.execute(
+                    "INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        ident,
+                        "project",
+                        project_id,
+                        "fact",
+                        key,
+                        value,
+                        "verified",
+                        1,
+                        sources,
+                        0.4,
+                        now,
+                        now,
+                        None,
+                    ),
+                )
+            return self._version(ident, "native structural verification; not aesthetic judgement")
 
     def review(self, ident, expected_revision, *, action, value=None):
         if action not in {"verify", "reject", "restore"}:
@@ -227,27 +359,62 @@ class MemoryStore:
                 raise RevisionConflict("Memory changed since it was opened; reload before editing")
             if action == "verify":
                 # The user explicitly chooses which conflicting version is authoritative.
-                conflicts = list(self.db.execute("SELECT id FROM memories WHERE scope=? AND owner=? AND key=? AND id<>? AND status IN ('verified','candidate','conflict')",
-                    (item["scope"], item["owner"], item["key"], ident)))
+                conflicts = list(
+                    self.db.execute(
+                        "SELECT id FROM memories WHERE scope=? AND owner=? AND key=? AND id<>? AND status IN ('verified','candidate','conflict')",
+                        (item["scope"], item["owner"], item["key"], ident),
+                    )
+                )
                 for old in conflicts:
-                    self.db.execute("UPDATE memories SET status='superseded',revision=revision+1,updated=? WHERE id=?", (time.time(), old[0]))
+                    self.db.execute(
+                        "UPDATE memories SET status='superseded',revision=revision+1,updated=? WHERE id=?",
+                        (time.time(), old[0]),
+                    )
                     self._version(old[0], "superseded by explicit user decision " + ident)
             value = clean(value, 4000) if value is not None else item["value"]
             if "[redacted credential]" in value:
                 raise ValueError("Credentials cannot become memories")
             status = {"verify": "verified", "reject": "rejected", "restore": "candidate"}[action]
-            self.db.execute("UPDATE memories SET value=?,status=?,revision=revision+1,updated=?,expires=? WHERE id=?",
-                (value, status, time.time(), time.time()+86400 if item["scope"] == "session" else None, ident))
+            if action == "reject":
+                self._block(item)
+            elif action == "restore":
+                self.db.execute(
+                    "DELETE FROM memory_blocks WHERE scope=? AND owner=? AND key=? AND digest=?",
+                    (item["scope"], item["owner"], item["key"], self.value_digest(item["value"])),
+                )
+            self.db.execute(
+                "UPDATE memories SET value=?,status=?,revision=revision+1,updated=?,expires=? WHERE id=?",
+                (
+                    value,
+                    status,
+                    time.time(),
+                    time.time() + 86400 if item["scope"] == "session" else None,
+                    ident,
+                ),
+            )
             return self._version(ident, "explicit user " + action)
 
     def versions(self, ident):
-        return [dict(r) for r in self.db.execute("SELECT * FROM memory_versions WHERE memory_id=? ORDER BY revision", (ident,))]
+        return [
+            dict(r)
+            for r in self.db.execute(
+                "SELECT * FROM memory_versions WHERE memory_id=? ORDER BY revision", (ident,)
+            )
+        ]
 
     def forget(self, ident, expected_revision):
         with self.transaction():
             item = self.get(ident)
             if item["revision"] != expected_revision:
                 raise RevisionConflict("Reload memory before forgetting")
+            self._block(item)
+            # Summaries are derived data and may repeat a removed fact. Regenerate
+            # from originals, which have their own explicit project-erasure control.
+            for source in item["sources"]:
+                if source.get("thread_id"):
+                    self.db.execute(
+                        "DELETE FROM summaries WHERE thread_id=?", (source["thread_id"],)
+                    )
             self.db.execute("DELETE FROM memories WHERE id=?", (ident,))
         # Checkpoint reduces recoverable WAL content; filesystem backups are outside this service.
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -263,59 +430,216 @@ class MemoryStore:
         if verified:
             query += " AND status='verified' AND (expires IS NULL OR expires>?)"
             args.append(time.time())
-        return [self.decode(r) for r in self.db.execute(query + " ORDER BY importance DESC,updated DESC LIMIT 2000", args)]
+        return [
+            self.decode(r)
+            for r in self.db.execute(
+                query + " ORDER BY importance DESC,updated DESC LIMIT 2000", args
+            )
+        ]
 
     def retrieve(self, project_id, thread_id, query, *, budget=1200, include_user=True):
         words = terms(query)
-        candidates = self.visible(project_id, thread_id, verified=True, include_user=include_user)
-        ranked = sorted(candidates, key=lambda m: (len(words & terms(m["key"]+" "+m["value"])) * 3
-            + m["importance"] + (0.3 if m["kind"] == "constraint" else 0)
-            + 0.2 / (1 + (time.time()-m["updated"])/86400)), reverse=True)
+        candidates = self.resolved(project_id, thread_id, include_user=include_user)
+        scored = []
+        for item in candidates:
+            vocabulary = terms(item["key"] + " " + item["value"])
+            overlap = len(words & vocabulary)
+            pinned = item["kind"] == "constraint" and item["importance"] >= 0.9
+            if not overlap and not pinned:
+                continue
+            age_days = max(0, (time.time() - item["updated"]) / 86400)
+            score = overlap / max(1, math.sqrt(len(vocabulary))) * 3 + item["importance"]
+            score += (2 if pinned else 0) + 0.2 / (1 + age_days)
+            scored.append(
+                (
+                    score,
+                    dict(
+                        item,
+                        retrieval_reason="pinned constraint"
+                        if pinned
+                        else f"{overlap} matching terms; scope precedence applied",
+                    ),
+                )
+            )
+        ranked = [m for _, m in sorted(scored, key=lambda pair: (-pair[0], pair[1]["id"]))]
         result, used = [], 0
         for item in ranked:
-            cost = tokens(json.dumps({k:item[k] for k in ("id", "revision", "scope", "kind", "value")}, ensure_ascii=False))
+            cost = tokens(
+                json.dumps(
+                    {k: item[k] for k in ("id", "revision", "scope", "kind", "key", "value")},
+                    ensure_ascii=False,
+                )
+            )
             if used + cost <= budget:
                 result.append(item)
                 used += cost
         return result
 
+    @staticmethod
+    def value_digest(value):
+        return hashlib.sha256(
+            unicodedata.normalize("NFKC", value).casefold().strip().encode()
+        ).hexdigest()
+
+    def _block(self, item):
+        self.db.execute(
+            "INSERT OR IGNORE INTO memory_blocks VALUES(?,?,?,?,?)",
+            (
+                item["scope"],
+                item["owner"],
+                item["key"],
+                self.value_digest(item["value"]),
+                time.time(),
+            ),
+        )
+
+    def resolved(self, project_id, thread_id, *, include_user=True):
+        """More specific verified intent overrides a personal default with the same key."""
+        priority = {"session": 3, "project": 2, "user": 1}
+        visible = self.visible(project_id, thread_id, verified=True, include_user=include_user)
+        result = {}
+        for item in sorted(
+            visible, key=lambda m: (priority[m["scope"]], m["updated"]), reverse=True
+        ):
+            result.setdefault(item["key"], item)
+        return list(result.values())
+
+    def conflicts(self, project_id, thread_id, *, include_user=True):
+        return [
+            {k: m[k] for k in ("id", "key", "value", "scope", "revision")}
+            for m in self.visible(project_id, thread_id, include_user=include_user)
+            if m["status"] == "conflict" and (m["expires"] is None or m["expires"] > time.time())
+        ]
+
+    def record_episode(self, project_id, run_id, task_id, goal, outcome, evidence, *, attempts=1):
+        """Execution history, never promoted to a universal procedure or user preference."""
+        if (
+            outcome not in {"succeeded", "failed", "cancelled"}
+            or type(attempts) is not int
+            or attempts < 1
+        ):
+            raise ValueError("Invalid execution outcome")
+        if not isinstance(evidence, dict):
+            raise ValueError("Execution evidence must be an object")
+        encoded = clean(json.dumps(evidence, ensure_ascii=False), 64000)
+        self.db.execute(
+            """INSERT INTO episodes VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(project_id,run_id,task_id) DO UPDATE SET outcome=excluded.outcome,
+            evidence=excluded.evidence,attempts=excluded.attempts,updated=excluded.updated""",
+            (
+                uuid.uuid4().hex,
+                project_id,
+                run_id,
+                task_id,
+                clean(goal, 20000),
+                outcome,
+                encoded,
+                attempts,
+                time.time(),
+            ),
+        )
+
+    def recall_episodes(self, project_id, query, *, limit=4):
+        words = terms(query)
+        found = []
+        for row in self.db.execute(
+            "SELECT * FROM episodes WHERE project_id=? ORDER BY updated DESC LIMIT 1000",
+            (project_id,),
+        ):
+            overlap = len(words & terms(row["goal"] + " " + row["task_id"]))
+            if overlap or not words:
+                item = dict(row)
+                item["evidence"] = json.loads(item["evidence"])
+                found.append((overlap, item))
+        return [item for _, item in sorted(found, key=lambda pair: -pair[0])[:limit]]
+
     def summary(self, thread_id):
-        row = self.db.execute("SELECT * FROM summaries WHERE thread_id=? ORDER BY through_id DESC,id DESC LIMIT 1", (thread_id,)).fetchone()
+        row = self.db.execute(
+            "SELECT * FROM summaries WHERE thread_id=? ORDER BY through_id DESC,id DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
         return dict(row) if row else None
 
     def save_summary(self, thread_id, source_ids, body, *, mode="semantic"):
         self.thread(thread_id)
         if not source_ids or mode not in {"semantic", "extractive"}:
             raise ValueError("Summary requires sources and a valid mode")
-        actual = {r[0] for r in self.db.execute('SELECT id FROM turns WHERE thread_id=?',(thread_id,))}
-        if not set(source_ids) <= actual:
-            raise ValueError("Summary cites another conversation or missing turns")
-        encoded = clean(json.dumps(body, ensure_ascii=False), 16000)
-        self.db.execute("INSERT INTO summaries(thread_id,through_id,body,source_ids,mode,created) VALUES(?,?,?,?,?,?)",
-            (thread_id, max(source_ids), encoded, json.dumps(sorted(set(source_ids))), mode, time.time()))
+        if any(type(i) is not int for i in source_ids):
+            raise ValueError("Summary source IDs must be integers")
+        actual = {
+            r[0]
+            for r in self.db.execute(
+                "SELECT id FROM turns WHERE thread_id=? AND state='complete' AND id<=?",
+                (thread_id, max(source_ids)),
+            )
+        }
+        if set(source_ids) != actual:
+            raise ValueError(
+                "Summary coverage must be a contiguous prefix of complete turns in this conversation"
+            )
+        encoded = clean(json.dumps(body, ensure_ascii=False), 64000)
+        with self.transaction():
+            previous = self.summary(thread_id)
+            if previous and max(source_ids) <= previous["through_id"]:
+                raise RevisionConflict("Summary checkpoint is stale")
+            self.db.execute(
+                "INSERT INTO summaries(thread_id,through_id,body,source_ids,mode,created) VALUES(?,?,?,?,?,?)",
+                (
+                    thread_id,
+                    max(source_ids),
+                    encoded,
+                    json.dumps(sorted(set(source_ids))),
+                    mode,
+                    time.time(),
+                ),
+            )
 
     def export_project(self, project_id):
         threads = self.threads(project_id)
-        return {"schema": 1, "project_id": project_id, "threads": [dict(t, turns=self.turns(t["id"],limit=None)) for t in threads],
-                "memories": [self.decode(r) for r in self.db.execute("SELECT * FROM memories WHERE (scope='project' AND owner=?) OR (scope='session' AND owner IN (SELECT id FROM threads WHERE project_id=?))", (project_id, project_id))]}
+        return {
+            "schema": 2,
+            "project_id": project_id,
+            "episodes": self.recall_episodes(project_id, "", limit=1000),
+            "threads": [dict(t, turns=self.turns(t["id"], limit=None)) for t in threads],
+            "memories": [
+                self.decode(r)
+                for r in self.db.execute(
+                    "SELECT * FROM memories WHERE (scope='project' AND owner=?) OR (scope='session' AND owner IN (SELECT id FROM threads WHERE project_id=?))",
+                    (project_id, project_id),
+                )
+            ],
+        }
 
     def forget_project(self, project_id):
         """Erase project originals and any memory that cites them, including personal copies."""
-        threads = {t['id'] for t in self.threads(project_id)}
+        threads = {t["id"] for t in self.threads(project_id)}
         with self.transaction():
-            for row in list(self.db.execute('SELECT * FROM memories')):
+            for row in list(self.db.execute("SELECT * FROM memories")):
                 item = self.decode(row)
-                owns = (item['scope']=='project' and item['owner']==project_id) or (item['scope']=='session' and item['owner'] in threads)
-                cites = any(s.get('project_id')==project_id or s.get('thread_id') in threads for s in item['sources'])
+                owns = (item["scope"] == "project" and item["owner"] == project_id) or (
+                    item["scope"] == "session" and item["owner"] in threads
+                )
+                cites = any(
+                    s.get("project_id") == project_id or s.get("thread_id") in threads
+                    for s in item["sources"]
+                )
                 if owns or cites:
-                    self.db.execute('DELETE FROM memories WHERE id=?',(item['id'],))
+                    self.db.execute("DELETE FROM memories WHERE id=?", (item["id"],))
             for thread in threads:
-                self.db.execute('DELETE FROM summaries WHERE thread_id=?',(thread,))
-                self.db.execute('DELETE FROM turns WHERE thread_id=?',(thread,))
-            self.db.execute('DELETE FROM threads WHERE project_id=?',(project_id,))
-            self.db.execute('DELETE FROM events WHERE project_id=?',(project_id,))
-            self.db.execute('DELETE FROM projects WHERE id=?',(project_id,))
-        self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                self.db.execute("DELETE FROM summaries WHERE thread_id=?", (thread,))
+                self.db.execute("DELETE FROM turns WHERE thread_id=?", (thread,))
+            self.db.execute("DELETE FROM threads WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM events WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM episodes WHERE project_id=?", (project_id,))
+            self.db.execute(
+                "DELETE FROM memory_blocks WHERE scope='project' AND owner=?", (project_id,)
+            )
+            for thread in threads:
+                self.db.execute(
+                    "DELETE FROM memory_blocks WHERE scope='session' AND owner=?", (thread,)
+                )
+            self.db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def backup(self, destination):
         target = sqlite3.connect(str(destination))
@@ -325,4 +649,6 @@ class MemoryStore:
             target.close()
 
     def fingerprint(self, project_id, thread_id):
-        return hashlib.sha256(json.dumps(self.visible(project_id, thread_id), sort_keys=True).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(self.visible(project_id, thread_id), sort_keys=True).encode()
+        ).hexdigest()

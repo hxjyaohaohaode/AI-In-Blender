@@ -1,6 +1,6 @@
 > [中文](README.md) | English
 
-# AI in Blender · Agent Platform 3.1
+# AI in Blender · Agent Platform 3.2
 
 A persistent Blender agent platform with multi-turn dialogue, source-backed memory,
 multimodal references, concurrent independent experts and checked scene branches.
@@ -10,6 +10,14 @@ It provides measurable production controls, not guaranteed aesthetic quality or
 native integration with every vendor.
 
 ## Features
+
+Version 3.2 fixes the published Blender 3.6 preset regression and strengthens the
+full lifecycle: scoped memory evolution and forget suppression, complete-turn
+budgeted compaction, independent failure scheduling, persistent call receipts,
+GET-only recovery of known jobs, hashed outputs, evaluated candidate checks,
+inherited contracts, review-repair-review, and precise edit/import compensation.
+See [workflow lifecycles](docs/WORKFLOW_LIFECYCLES.md) and
+[validation](docs/VALIDATION.md) for implementation details and evidence boundaries.
 
 - Planner, modeling, material, rigging, animation and review roles, geometry inspection and export.
 - Capability-based routing to different providers and models.
@@ -32,8 +40,8 @@ native integration with every vendor.
 
 Run `python tools/build.py` and install one ZIP:
 
-- `dist/ai-in-blender-3.1.0-extension.zip`: Blender 4.2+, Get Extensions → Install from Disk.
-- `dist/ai-in-blender-3.1.0-legacy.zip`: Blender 3.6+, Add-ons → Install / Install from Disk.
+- `dist/ai-in-blender-3.2.0-extension.zip`: Blender 4.2+, Get Extensions → Install from Disk.
+- `dist/ai-in-blender-3.2.0-legacy.zip`: Blender 3.6+, Add-ons → Install / Install from Disk.
 
 Disable the old single-file add-on before upgrading. No runtime pip dependencies.
 Open the **AI Model** sidebar and try **Offline Demo** to create a mechanical asset

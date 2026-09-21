@@ -1,4 +1,5 @@
 """Private worker entrypoint. Requests arrive through stdin, never process arguments."""
+
 import json
 from pathlib import Path
 import sys
@@ -8,7 +9,7 @@ if __package__ in {None, ""}:
 
 from ai_modeling_assistant.core.config import ProviderConfig
 from ai_modeling_assistant.core.providers import chat
-from ai_modeling_assistant.core.media import generate
+from ai_modeling_assistant.core.media import generate, recover
 
 
 def main():
@@ -21,9 +22,17 @@ def main():
         config = ProviderConfig.from_dict(data["config"])
         if data["action"] == "chat" and config.protocol == "chat":
             result = chat(config, data["messages"], data.get("system_prompt", ""))
+        elif data["action"] == "recover":
+            result = recover(config, data["output_dir"])
         else:
-            result = generate(config, data["capability"], data["prompt"], data["output_dir"],
-                              data.get("input_path", ""), data.get("inputs", []))
+            result = generate(
+                config,
+                data["capability"],
+                data["prompt"],
+                data["output_dir"],
+                data.get("input_path", ""),
+                data.get("inputs", []),
+            )
     except Exception as exc:
         message = str(exc)
         if config is not None and config.api_key:
