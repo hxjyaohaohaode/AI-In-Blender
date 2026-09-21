@@ -22,6 +22,8 @@ class PackagingTests(unittest.TestCase):
                     self.assertIn(prefix + "__init__.py", names)
                     self.assertIn(prefix + "worker.py", names)
                     self.assertEqual("blender_manifest.toml" in names, "extension" in path.name)
+                    documents = [name for name in names if name.startswith(prefix + "docs/")]
+                    self.assertEqual(documents, sorted(documents))
             self.assertEqual(
                 hashes, [hashlib.sha256(p.read_bytes()).hexdigest() for p in build(folder)]
             )

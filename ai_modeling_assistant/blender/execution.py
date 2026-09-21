@@ -1,5 +1,7 @@
 """Generated code execution with static guard, line deadline and limited cleanup."""
+
 import builtins
+from array import array
 import sys
 import time
 import traceback
@@ -20,15 +22,27 @@ class CodeExecutor:
         snapshots = []
         for obj in targets:
             if obj.type == "MESH":
-                snapshots.append((obj, obj.data.copy(), obj.matrix_world.copy(), set(obj.modifiers)))
+                # Blender 3.6 can share UV storage after Mesh.copy(); writes via
+                # the legacy UV API may also change the nominal backup. Capture
+                # values independently so failure really restores the original.
+                uv_values = []
+                for layer in obj.data.uv_layers:
+                    values = array("f", [0]) * (len(layer.data) * 2)
+                    layer.data.foreach_get("uv", values)
+                    uv_values.append((layer.name, values))
+                snapshots.append(
+                    (obj, obj.data.copy(), obj.matrix_world.copy(), set(obj.modifiers), uv_values)
+                )
         output = []
 
         def capture(*args, sep=" ", end="\n"):
             if sum(len(line) for line in output) < 16000:
                 output.append(sep.join(str(a) for a in args) + end)
 
-        namespace = {"__builtins__": {n: getattr(builtins, n) for n in SAFE_BUILTINS},
-                     "__name__": "ai_model_code"}
+        namespace = {
+            "__builtins__": {n: getattr(builtins, n) for n in SAFE_BUILTINS},
+            "__name__": "ai_model_code",
+        }
         namespace["__builtins__"]["__import__"] = restricted_import
         namespace["__builtins__"]["print"] = capture
         import bmesh
@@ -36,9 +50,19 @@ class CodeExecutor:
         import mathutils
         import random
         import copy
-        namespace.update(bpy=bpy, bmesh=bmesh, math=math, mathutils=mathutils, random=random,
-                         copy=copy, Vector=mathutils.Vector, Matrix=mathutils.Matrix,
-                         Euler=mathutils.Euler, Quaternion=mathutils.Quaternion)
+
+        namespace.update(
+            bpy=bpy,
+            bmesh=bmesh,
+            math=math,
+            mathutils=mathutils,
+            random=random,
+            copy=copy,
+            Vector=mathutils.Vector,
+            Matrix=mathutils.Matrix,
+            Euler=mathutils.Euler,
+            Quaternion=mathutils.Quaternion,
+        )
         started = time.monotonic()
         count = 0
 
@@ -74,10 +98,13 @@ class CodeExecutor:
                     pass
             for obj in set(bpy.data.objects) - before:
                 bpy.data.objects.remove(obj, do_unlink=True)
-            for obj, mesh, matrix, modifiers in snapshots:
+            for obj, mesh, matrix, modifiers, uv_values in snapshots:
                 if obj.name in bpy.data.objects:
                     old_mesh = obj.data
                     obj.data, obj.matrix_world = mesh, matrix
+                    for name, values in uv_values:
+                        mesh.uv_layers[name].data.foreach_set("uv", values)
+                    mesh.update()
                     for modifier in list(obj.modifiers):
                         if modifier not in modifiers:
                             obj.modifiers.remove(modifier)
@@ -86,6 +113,6 @@ class CodeExecutor:
             return False, error
         finally:
             sys.settrace(old_trace)
-            for obj, mesh, matrix, modifiers in snapshots:
+            for obj, mesh, matrix, modifiers, uv_values in snapshots:
                 if mesh.users == 0:
                     bpy.data.meshes.remove(mesh)

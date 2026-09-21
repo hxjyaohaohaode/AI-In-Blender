@@ -5,6 +5,11 @@ GitHub failure was seven Blender 3.6 material-preset fallbacks raising `NameErro
 for an unavailable `KeyError`. The regression test now explicitly exercises that
 fallback on every version, and the preset suite still exercises the actual nodes.
 
+The expanded matrix also exposed Blender 3.6's shared UV storage after `Mesh.copy()`.
+The region regression now uses a real isolated candidate and asserts that the source
+UVs remain unchanged. Direct execution rollback keeps independent UV value buffers.
+Both cases were reproduced and passed on the official Windows 3.6.23 portable build.
+
 ## Run all checks
 
 Use a Python installation that includes SQLite. On the development Windows host,
@@ -30,7 +35,9 @@ counts, exceptions and success. A failing test or installation fails the command
 - Blender: Linux 3.6.23, 4.2.0, 4.5.3 and 5.1.1; verified official download hashes.
 - Legacy installation: every Blender matrix entry.
 - Real extension installation and packaged workers: 4.2.0, 4.5.3 and 5.1.1.
-- Host validation: Windows Blender 5.1.1, build `b70da489d7f4`.
+- Host validation: Windows Blender 3.6.23 (`e467db79ca8c`) and 5.1.1 (`b70da489d7f4`),
+  45 integration tests each, with real legacy installs; 5.1 also installs the extension.
+- Core suite: 72 tests covering memory, execution contracts, network protocols and packages.
 
 Use [Actions](https://github.com/hxjyaohaohaode/AI-In-Blender/actions) for the result
 of a specific commit. Matrix logs and package archives are uploaded as artifacts.

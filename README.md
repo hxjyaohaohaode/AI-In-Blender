@@ -64,7 +64,7 @@
 
 | 版本 | 状态 |
 |---|---|
-| Windows + Blender 5.1.1 | 本机实际验证，详见 [验证记录](docs/VALIDATION.md) |
+| Windows + Blender 3.6.23 / 5.1.1 | 本机实际验证，详见 [验证记录](docs/VALIDATION.md) |
 | Linux + 3.6.23 | CI：源码、预设、流程与传统 ZIP 安装 |
 | Linux + 4.2.0 / 4.5.3 / 5.1.1 | CI：源码、传统 ZIP、真实扩展安装及工作进程 |
 | 其他 4.x/5.x、macOS | 未列入实测矩阵 |

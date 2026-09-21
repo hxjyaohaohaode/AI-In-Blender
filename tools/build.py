@@ -37,7 +37,7 @@ def build(destination):
             ]
             if kind == "extension":
                 files.append(PACKAGE / "blender_manifest.toml")
-            for file in sorted(files):
+            for file in sorted(files, key=lambda p: p.relative_to(PACKAGE).as_posix()):
                 name = file.relative_to(PACKAGE).as_posix()
                 if kind == "legacy":
                     name = "ai_modeling_assistant/" + name
@@ -48,7 +48,10 @@ def build(destination):
                 archive.writestr(info, file.read_text(encoding="utf-8").encode("utf-8"))
             extras = ["README.md", "README_EN.md", "LICENSE"]
             extras += [
-                p.relative_to(ROOT).as_posix() for p in sorted((ROOT / "docs").rglob("*.md"))
+                p.relative_to(ROOT).as_posix()
+                for p in sorted(
+                    (ROOT / "docs").rglob("*.md"), key=lambda p: p.relative_to(ROOT).as_posix()
+                )
             ]
             for filename in extras:
                 if (ROOT / filename).is_file():

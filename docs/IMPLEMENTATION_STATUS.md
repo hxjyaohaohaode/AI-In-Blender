@@ -4,6 +4,8 @@ The original single-file add-on was replaced on `codex/studio-refactor`. The fir
 published candidate was `207cfc8`, reviewed in PR #1. Its GitHub Blender 3.6 job failed
 seven preset subtests because `KeyError` was missing from restricted builtins.
 Version 3.2 fixes that regression and strengthens production lifecycle enforcement.
+The expanded 3.6 tests also led to independent UV rollback buffers and a real
+isolated-process region regression instead of a UV-sharing in-process mesh copy.
 
 ## Implemented and regression-tested mechanisms
 

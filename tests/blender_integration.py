@@ -709,20 +709,46 @@ class BlenderTests(unittest.TestCase):
         self.assertNotEqual(baseline, fingerprint([obj]))
 
     def test_precise_edit_rejects_uv_change_outside_selected_faces(self):
-        from ai_modeling_assistant.blender.revision import ensure_ids, region_preserved
+        from ai_modeling_assistant.blender.revision import ensure_ids, fingerprint
+        from ai_modeling_assistant.blender.staging import SceneJob
 
         bpy.ops.mesh.primitive_cube_add()
         obj = bpy.context.object
         ensure_ids([obj])
-        candidate = obj.copy()
-        candidate.data = obj.data.copy()
-        candidate.data.uv_layers[0].data[-1].uv.x += 0.4
+        before = [tuple(v.uv) for v in obj.data.uv_layers[0].data]
+        # Use the real isolated process. In 3.6 Mesh.copy can share UV storage;
+        # an in-process fake candidate would also mutate its alleged original.
+        job = SceneJob(
+            f"import bpy\nbpy.data.objects[{obj.name!r}].data.uv_layers[0].data[-1].uv.x += 0.4",
+            [obj],
+            self.directory.name,
+            render=False,
+            regions=[
+                {
+                    "asset_id": obj["ama_asset_id"],
+                    "vertices": [0],
+                    "faces": [0],
+                    "fingerprint": fingerprint([obj]),
+                }
+            ],
+        )
+        result = self.wait_scene_job(job)
+        self.assertEqual(before, [tuple(v.uv) for v in obj.data.uv_layers[0].data])
         with self.assertRaisesRegex(ValueError, "UVs outside"):
-            region_preserved(
-                [obj],
-                [candidate],
-                [{"asset_id": obj["ama_asset_id"], "vertices": [0], "faces": [0]}],
-            )
+            job.commit(result, self.scene.collection)
+        self.assertEqual(before, [tuple(v.uv) for v in obj.data.uv_layers[0].data])
+
+    def test_failed_code_restores_original_uv_values(self):
+        bpy.ops.mesh.primitive_cube_add()
+        obj = bpy.context.object
+        before = [tuple(v.uv) for v in obj.data.uv_layers[0].data]
+        passed, _ = CodeExecutor.execute(
+            "import bpy\nbpy.context.object.data.uv_layers[0].data[-1].uv.x += 0.4\n"
+            "raise ValueError('stop before committing')",
+            targets=[obj],
+        )
+        self.assertFalse(passed)
+        self.assertEqual(before, [tuple(v.uv) for v in obj.data.uv_layers[0].data])
 
     def test_scope_requires_external_parent_to_be_explicit(self):
         from ai_modeling_assistant.blender.staging import SceneJob

@@ -2,7 +2,7 @@
 
 ## 安装与第一条完整工作流
 
-Blender 4.2+ 选择 `dist/ai-in-blender-3.2.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。本机已实测 Windows / Blender 5.1.1；其他版本见验证记录。
+Blender 4.2+ 选择 `dist/ai-in-blender-3.2.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。本机已实测 Windows / Blender 3.6.23 和 5.1.1；其他版本见验证记录。
 
 1. 在 Models & Settings 中添加 Chat Completions 模型，填写实际 Base URL、模型 ID 和密钥环境变量；密钥输入框只在当前会话保留。给不同提供商分配 planner、conversation、modeler、material、rigger、animator、reviewer 等角色。Vision 只有确实支持图片的模型才能启用。
 2. 在 Conversation & Memory 中讨论目标，例如“做一个适合游戏引擎的机械无人机，左右旋翼为独立部件，保留可动画的接口”。继续补充“总宽 1.2 米、两侧锚点分别在 X=±0.45 米”，真实原文会逐条保存。
