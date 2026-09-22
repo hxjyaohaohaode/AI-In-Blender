@@ -1,4 +1,9 @@
-# Implementation status: Agent Platform 3.2
+# Implementation status: Agent Platform 3.3
+
+Version 3.3 adds official Blender 5.2.2 compatibility, explicit scene-setting commits,
+bound animation and material/UV gates, Cycles evidence, checked GLB/native scene delivery,
+memory v3 event history and stale-summary guards, and long-conversation compaction.
+Full findings and remaining boundaries: [QUALITY_AUDIT_3_3.md](QUALITY_AUDIT_3_3.md).
 
 The original single-file add-on was replaced on `codex/studio-refactor`. The first
 published candidate was `207cfc8`, reviewed in PR #1. Its GitHub Blender 3.6 job failed
@@ -9,7 +14,7 @@ isolated-process region regression instead of a UV-sharing in-process mesh copy.
 
 ## Implemented and regression-tested mechanisms
 
-- Persistent multi-turn conversations, scoped source-backed memory and SQLite v2
+- Persistent multi-turn conversations, scoped source-backed memory and SQLite v3
   migration; review/expiry/conflict/forget workflows and execution episodes.
 - Complete-turn bounded compaction, source coverage validation, fixed user
   constraints and accounting of maintenance/planning/repair/vision requests.
@@ -33,8 +38,9 @@ Provider protocols are tested with local HTTP fixtures and real subprocesses. No
 claim is made that paid LLM/Meshy/video/voice/world accounts, arbitrary vendor APIs,
 or expert artistic quality were validated. Third-party world models need an actual
 Bridge implementation. Grease Pencil creation is automated; interactive freehand
-drawing and viewport capture still require a GUI acceptance session. Workbench
-evidence is geometry preview, not a complete PBR or animation quality assessment.
+drawing and viewport capture still require a GUI acceptance session. Workbench,
+Cycles studio previews and finite temporal checks are evidence with named scope,
+not a complete lighting, artistic or continuous-animation quality assessment.
 
 Compatibility is measured for the versions in CI, not all historical/future Blender
 versions. Complex external texture/driver/third-party data semantics are not a

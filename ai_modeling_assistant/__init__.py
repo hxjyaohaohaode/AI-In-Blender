@@ -3,7 +3,7 @@
 bl_info = {
     "name": "AI in Blender — Agent Platform",
     "author": "AI-In-Blender contributors",
-    "version": (3, 2, 0),
+    "version": (3, 3, 0),
     "blender": (3, 6, 0),
     "location": "3D View > Sidebar > AI Model",
     "description": "Multi-model creative workflows, modeling and asset tools",

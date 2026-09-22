@@ -137,6 +137,7 @@ class StudioRun:
         self.repairing_review = False
         self.review_evidence = ""
         self.review_images = []
+        self.review_views = []
         self.pending_quality = None
         self.visual_approval = None
         self.calls = 0
@@ -165,9 +166,15 @@ class StudioRun:
         else:
             with conversation.store() as db:
                 self.project_id, self.thread_id = conversation.identity(scene, db)
+            from ..core.attachments import attachment
+
+            audio = scene.ama_props.input_audio
             self.input_snapshot = {
                 "attachments": inputs.items(scene),
                 "region": json.loads(scene.ama_props.region_json or "[]"),
+                "audio": attachment(bpy.path.abspath(audio), role="transcription")
+                if audio
+                else None,
             }
         if not parent:
             self.scene.ama_props.workflow_report = str(self.folder / "run.json")
@@ -215,10 +222,11 @@ class StudioRun:
         signature = json.dumps(data, ensure_ascii=False, sort_keys=True)
         if self._journal_signature == signature:
             return
-        from .revision import fingerprint
+        from .revision import fingerprint, delivery_revision
 
         data["checkpoint"] = {
             "fingerprint": fingerprint(self.objects()),
+            "delivery_revision": delivery_revision(self.objects(), self.scene),
             "objects": [o.name for o in self.objects()],
             "targets": self.targets,
             "blend_file": bpy.data.filepath,
@@ -263,11 +271,13 @@ class StudioRun:
                 continue
             if task.capability != "builtin":
                 provider_for(task.capability, task.expert, self.scene)
-            if (
-                task.expert == "transcriber"
-                and not Path(bpy.path.abspath(self.props.input_audio)).is_file()
-            ):
-                raise ValueError("Select an audio input file before running transcription")
+            if task.expert == "transcriber":
+                from ..core.attachments import verified_bytes
+
+                audio = self.input_snapshot.get("audio")
+                if not audio or audio["kind"] != "audio":
+                    raise ValueError("Select an audio input file before running transcription")
+                verified_bytes(audio)
         if bpy.context.mode != "OBJECT":
             raise ValueError("Switch to Object Mode before starting a workflow")
 
@@ -366,7 +376,7 @@ class StudioRun:
         dependencies = self.dependency_results()
         memories = []
         episodes = []
-        if self.props.memory_retrieval and self.props.thread_id:
+        if self.props.memory_retrieval and self.thread_id:
             from . import conversation
 
             with conversation.store() as db:
@@ -377,12 +387,16 @@ class StudioRun:
                         project,
                         thread,
                         self.workflow.goal + " " + self.task.prompt,
-                        budget=1000,
+                        budget=max(1000, self.props.context_budget // 4),
                         include_user=self.props.personal_memory,
+                        require_pinned=True,
                     )
                 ]
                 episodes = [
-                    {k: e[k] for k in ("task_id", "goal", "outcome", "attempts", "evidence")}
+                    {
+                        k: e[k]
+                        for k in ("task_id", "goal", "outcome", "attempts", "evidence", "history")
+                    }
                     for e in db.recall_episodes(project, self.task.prompt, limit=2)
                 ]
         # Dependency results are structured references. Code and full quality dumps
@@ -421,6 +435,7 @@ class StudioRun:
         self.repairing_validation = False
         self.repairing_review = False
         self.scene_job_mode = "code"
+        self.review_evidence, self.review_images, self.review_views = "", [], []
         from .revision import fingerprint, ensure_ids
 
         ensure_ids(self.objects())
@@ -457,7 +472,11 @@ class StudioRun:
                         from .staging import SceneJob
 
                         self.scene_job = SceneJob(
-                            "pass", self.objects(), self.folder, contract=task.contract
+                            "pass",
+                            self.objects(),
+                            self.folder,
+                            contract=task.contract,
+                            contract_checks=self.inherited_contracts(),
                         )
                         self.scene_job_mode = "review"
                         self.status("Rendering current geometry evidence for the review agent…")
@@ -470,6 +489,8 @@ class StudioRun:
                         + "\nReturn a complete Python code block. Do not delete scene objects or use files, "
                         "network, reflection, private attributes or bpy.ops.wm. Do not call export/import "
                         "operators. Use bmesh.ops.recalc_face_normals, not normals_make_consistent. "
+                        "For Geometry Nodes modifier inputs call the provided set_geometry_input(modifier, "
+                        "socket.identifier, value) helper; it handles both legacy and Blender 5.2 RNA sockets. "
                         "Do not read preferences. Current Blender: " + bpy.app.version_string
                     )
                 messages = [{"role": "user", "content": prompt}]
@@ -509,6 +530,18 @@ class StudioRun:
                     else self.input_snapshot["attachments"]
                 )
                 # Media providers receive their own focused prompt, not Python instructions.
+                audio_path = ""
+                if task.expert == "transcriber":
+                    from ..core.attachments import verified_bytes
+
+                    audio = self.input_snapshot["audio"]
+                    # Persist exactly the verified bytes for the child. Changing
+                    # the UI selection or source file cannot change this request.
+                    frozen = self.folder / (
+                        "transcription-input" + Path(audio["path"]).suffix.lower()
+                    )
+                    frozen.write_bytes(verified_bytes(audio))
+                    audio_path = str(frozen)
                 self.job = self.job_factory(
                     {
                         "action": action,
@@ -516,7 +549,7 @@ class StudioRun:
                         "capability": task.capability,
                         "prompt": task.prompt,
                         "output_dir": str(output),
-                        "input_path": bpy.path.abspath(self.props.input_audio),
+                        "input_path": audio_path,
                         "inputs": supplied,
                     }
                 )
@@ -555,9 +588,12 @@ class StudioRun:
                 if result.get("error"):
                     self.abort("Review evidence failed: " + result["error"])
                     return False
-                from .revision import fingerprint
+                from .revision import fingerprint, scene_revision
 
-                if fingerprint(self.objects()) != self.baseline:
+                if (
+                    fingerprint(self.objects()) != self.baseline
+                    or scene_revision(self.scene) != self.scene_baseline
+                ):
                     self.abort("Human edit conflict: reviewer snapshot is stale")
                     return False
                 from ..core.attachments import attachment, vision_parts
@@ -568,10 +604,14 @@ class StudioRun:
                     {
                         "type": "text",
                         "text": self.task_prompt()
-                        + "\nThe attached image is a Workbench geometry preview, not a final PBR render. Review shape and composition; do not assert texture/lighting validation.",
+                        + "\nEvidence view metadata: "
+                        + json.dumps(result.get("evidence_views", []))
+                        + "\nWorkbench views only support geometry review. Cycles studio material previews support material appearance, "
+                        "not final scene lighting. Animation samples cover only the named frames, not continuous motion. "
+                        "Only claim evidence actually attached to this request.",
                     }
                 ]
-                self.review_images = []
+                self.review_images, self.review_views = [], []
                 for path in result.get("previews", [self.review_evidence]):
                     candidate = content + vision_parts([attachment(path)], enabled=True)
                     try:
@@ -587,6 +627,9 @@ class StudioRun:
                         break
                     content = candidate
                     self.review_images.append(path)
+                    self.review_views.extend(
+                        v for v in result.get("evidence_views", []) if v["path"] == path
+                    )
                 self.submit_chat(
                     config, [{"role": "user", "content": content}], EXPERTS["reviewer"][2]
                 )
@@ -601,7 +644,7 @@ class StudioRun:
                     return self.running
                 self.visual_approval = None
                 if self.input_snapshot["region"]:
-                    from .revision import fingerprint
+                    from .revision import fingerprint, scene_revision
 
                     for region in self.input_snapshot["region"]:
                         target = next(
@@ -610,15 +653,20 @@ class StudioRun:
                         region["fingerprint"] = fingerprint([target])
                 if self.repairing_review:
                     self.repairing_review = self.repairing_validation = False
-                    from .revision import fingerprint
+                    from .revision import fingerprint, scene_revision
 
                     self.baseline = fingerprint(self.objects())
+                    self.scene_baseline = scene_revision(self.scene)
                     config = provider_for("chat", "reviewer", self.scene)
                     if config.options.get("vision"):
                         from .staging import SceneJob
 
                         self.scene_job = SceneJob(
-                            "pass", self.objects(), self.folder, contract=self.task.contract
+                            "pass",
+                            self.objects(),
+                            self.folder,
+                            contract=self.task.contract,
+                            contract_checks=self.inherited_contracts(),
                         )
                         self.scene_job_mode = "review"
                     else:
@@ -637,6 +685,7 @@ class StudioRun:
                         "quality": job.quality,
                         "preview": result.get("preview", ""),
                         "previews": result.get("previews", []),
+                        "evidence_views": result.get("evidence_views", []),
                         "branch": str(job.folder),
                     }
                 )
@@ -717,9 +766,12 @@ class StudioRun:
             else:
                 self.execute_code(code)
         elif self.task.expert == "reviewer":
-            from .revision import fingerprint
+            from .revision import fingerprint, scene_revision
 
-            if fingerprint(self.objects()) != self.baseline:
+            if (
+                fingerprint(self.objects()) != self.baseline
+                or scene_revision(self.scene) != self.scene_baseline
+            ):
                 self.abort("Human edit conflict: model changed during creative review")
                 return
             report = extract_json(result.get("content", ""))
@@ -733,13 +785,14 @@ class StudioRun:
                 )
                 return
             report["evidence_type"] = (
-                "workbench geometry preview and scene facts"
+                "rendered previews and scene facts; per-view evidence types recorded"
                 if self.review_evidence
                 else "textual scene facts; no visual evidence"
             )
             report["preview"] = self.review_evidence
             report["previews"] = list(self.review_images)
             report["reviewed_view_count"] = len(self.review_images)
+            report["evidence_views"] = list(self.review_views)
             report["fingerprint"] = self.baseline
             self.complete_task(report)
         else:
@@ -804,9 +857,12 @@ class StudioRun:
     def execute_code(self, code):
         self.last_code = code
         self.status(f"Applying {self.task.id}…")
-        from .revision import fingerprint
+        from .revision import fingerprint, scene_revision
 
-        if fingerprint(self.objects()) != self.baseline:
+        if (
+            fingerprint(self.objects()) != self.baseline
+            or scene_revision(self.scene) != self.scene_baseline
+        ):
             self.abort(
                 "Human edit conflict: scene inputs changed while the model was generating code"
             )
@@ -831,7 +887,7 @@ class StudioRun:
             raise ValueError(
                 "Export blocked by native quality gate: " + "; ".join(report["errors"])
             )
-        if self.props.require_visual_review and self.visual_approval != report["fingerprint"]:
+        if self.props.require_visual_review and self.visual_approval != report["delivery_revision"]:
             self.pending_quality = report
             self.status(
                 "Native checks passed. Inspect the current model, then Approve Visual Quality to export."
@@ -839,9 +895,15 @@ class StudioRun:
             self.journal()
             return
         path = export_objects(self.folder / "asset.glb", self.objects())
+        from ..core.gltf import inspect_glb
+        from .compat import export_native_scene
+
+        report["export"] = inspect_glb(path)
+        native = export_native_scene(self.folder / "asset.blend", self.objects())
         self.complete_task(
             {
-                "artifacts": [{"kind": "model3d", "path": path}],
+                "artifacts": [{"kind": "model3d", "path": path}, {"kind": "blend", "path": native}],
+                "format_notes": "GLB is an interchange approximation. The native scene retains procedural shaders, world and animation. External textures/caches remain file references unless already packed.",
                 "quality": report,
                 "visual_review": "human approved"
                 if self.visual_approval
@@ -851,6 +913,7 @@ class StudioRun:
 
     def quality_report(self):
         from .quality import evaluate
+        from .revision import delivery_revision
 
         report = evaluate(self.objects(), self.task.contract)
         root = self.parent or self
@@ -870,6 +933,7 @@ class StudioRun:
             report["inherited_contracts"].append({"task": dependency.id, "report": item})
             report["errors"].extend(dependency.id + ": " + error for error in item["errors"])
         report["passed"] = not report["errors"]
+        report["delivery_revision"] = delivery_revision(self.objects(), self.scene)
         return report
 
     def inherited_contracts(self):
@@ -886,17 +950,20 @@ class StudioRun:
             self._quality_child.approve_quality()
             self._quality_child, self.pending_quality = None, None
             return
-        from .revision import fingerprint
+        from .revision import delivery_revision
 
         if self.pending_quality is None:
             raise ValueError("No visual quality gate awaits approval")
-        if fingerprint(self.objects()) != self.pending_quality["fingerprint"]:
+        if (
+            delivery_revision(self.objects(), self.scene)
+            != self.pending_quality["delivery_revision"]
+        ):
             self.pending_quality = None
             self.export_checked()
             raise ValueError(
-                "Model changed since inspection; review the refreshed report before approving"
+                "Model or scene settings changed since inspection; review the refreshed report before approving"
             )
-        self.visual_approval = self.pending_quality["fingerprint"]
+        self.visual_approval = self.pending_quality["delivery_revision"]
         self.pending_quality = None
         self.export_checked()
 
@@ -1238,7 +1305,7 @@ def start_multi_pass(scene):
 
 def resume_checkpoint(scene, report_path):
     """Explicit recovery from a matching saved scene; never silently resubmits jobs."""
-    from .revision import fingerprint
+    from .revision import fingerprint, delivery_revision
 
     path = Path(bpy.path.abspath(report_path)).resolve()
     if not path.is_file() or path.stat().st_size > 16_000_000:
@@ -1251,6 +1318,12 @@ def resume_checkpoint(scene, report_path):
     if fingerprint([scene.objects[n] for n in names]) != checkpoint.get("fingerprint"):
         raise ValueError(
             "Saved scene differs from the checkpoint; recovery would risk duplicating or overwriting edits"
+        )
+    if checkpoint.get("delivery_revision") != delivery_revision(
+        [scene.objects[n] for n in names], scene
+    ):
+        raise ValueError(
+            "Checkpoint scene settings differ or require a new version audit; revalidate before recovery"
         )
     workflow = Workflow.from_plan(data["goal"], data)
     collection = bpy.data.collections.get(data.get("collection", ""))
@@ -1317,10 +1390,11 @@ def start_reviewed_code(scene, code, targets):
     collection = bpy.data.collections.new("AI Studio " + run.folder.name)
     scene.collection.children.link(collection)
     run.collection_name = collection.name
-    from .revision import ensure_ids, fingerprint
+    from .revision import ensure_ids, fingerprint, scene_revision
 
     ensure_ids(run.objects())
     run.baseline = fingerprint(run.objects())
+    run.scene_baseline = scene_revision(scene)
     run.task = workflow.tasks[0]
     workflow.start(run.task)
     activate(run)

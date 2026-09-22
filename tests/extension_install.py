@@ -12,7 +12,8 @@ assert root / "artifacts" in expected.parents
 expected.mkdir(parents=True, exist_ok=True)
 (expected.parent / "version.json").write_text(json.dumps({"version": list(bpy.app.version)}))
 if bpy.app.version >= (4, 2, 0):
-    archives = sorted((root / "dist").glob("*-extension.zip"))
+    packages = Path(os.environ.get("AI_IN_BLENDER_PACKAGE_DIR", root / "dist"))
+    archives = sorted(packages.glob("*-extension.zip"))
     # build.py version is obtained without importing any source add-on modules;
     # the smoke test must import exclusively from the installed namespace.
     import ast
@@ -25,7 +26,7 @@ if bpy.app.version >= (4, 2, 0):
         and any(isinstance(t, ast.Name) and t.id == "bl_info" for t in n.targets)
     )
     version = ".".join(map(str, info["version"]))
-    archive = root / "dist" / f"ai-in-blender-{version}-extension.zip"
+    archive = packages / f"ai-in-blender-{version}-extension.zip"
     assert archive in archives
     bpy.ops.preferences.extension_repo_add(
         name="studio_smoke",

@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "ai_modeling_assistant"
-version = "3.2.0"
+version = "3.3.0"
 name = "AI in Blender — Agent Platform"
 tagline = "Expert workflows for modeling, animation and generated assets"
 maintainer = "AI-In-Blender contributors"

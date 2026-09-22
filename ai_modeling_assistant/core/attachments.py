@@ -11,6 +11,7 @@ KINDS = {
     ".jpeg": "image",
     ".webp": "image",
     ".glb": "model3d",
+    ".blend": "blend",
     ".gltf": "model3d",
     ".obj": "model3d",
     ".fbx": "model3d",

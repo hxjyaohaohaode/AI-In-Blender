@@ -12,6 +12,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
+from blender_audit import ProductionAuditMixin
 import bpy
 import addon_utils
 import ai_modeling_assistant as addon
@@ -56,7 +58,7 @@ class LayoutProbe:
         return call
 
 
-class BlenderTests(unittest.TestCase):
+class BlenderTests(ProductionAuditMixin, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         addon_utils.enable("ai_modeling_assistant", default_set=True)
@@ -296,6 +298,7 @@ class BlenderTests(unittest.TestCase):
         self.assertIn("preview", review["evidence_type"])
         self.assertTrue(Path(review["preview"]).is_file())
         self.assertGreaterEqual(review["reviewed_view_count"], 2)
+        self.assertEqual(len(review["evidence_views"]), review["reviewed_view_count"])
         self.assertTrue(all(Path(p).is_file() for p in review["previews"]))
         self.assertEqual(len(list(Path(review["preview"]).parent.glob("preview*.png"))), 3)
 

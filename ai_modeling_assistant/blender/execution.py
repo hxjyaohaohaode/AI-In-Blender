@@ -50,6 +50,7 @@ class CodeExecutor:
         import mathutils
         import random
         import copy
+        from .compat import set_geometry_input
 
         namespace.update(
             bpy=bpy,
@@ -62,6 +63,7 @@ class CodeExecutor:
             Matrix=mathutils.Matrix,
             Euler=mathutils.Euler,
             Quaternion=mathutils.Quaternion,
+            set_geometry_input=set_geometry_input,
         )
         started = time.monotonic()
         count = 0

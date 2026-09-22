@@ -51,22 +51,35 @@ class SceneJob:
         self.folder.mkdir(parents=True)
         self.contract = contract or {}
         self.contract_checks = contract_checks or []
-        if self.objects:
-            bpy.data.libraries.write(str(self.folder / "input.blend"), set(self.objects))
         scene = bpy.context.scene
+        if self.regions and self.contract.get("allow_scene_settings"):
+            raise ValueError("Precise region edits cannot change shared scene settings")
+        from .scene_state import capture
+
+        resources = set(self.objects)
+        if scene.world:
+            resources.add(scene.world)
+        if resources:
+            bpy.data.libraries.write(
+                str(self.folder / "input.blend"), resources, path_remap="ABSOLUTE"
+            )
         self.frames = [scene.frame_start, scene.frame_end]
         self.scene_before = scene_revision(scene)
+        self.settings_before = capture(scene, self.objects)
         payload = {
             "code": code,
             "objects": [o.name for o in self.objects],
             "contract": self.contract,
             "frames": self.frames,
             "current_frame": scene.frame_current,
+            "current_subframe": scene.frame_subframe,
             "unit_scale": scene.unit_settings.scale_length,
             "render": render,
             "contract_checks": self.contract_checks,
             "fps": scene.render.fps,
             "fps_base": scene.render.fps_base,
+            "settings": self.settings_before,
+            "world": scene.world.name if scene.world else None,
         }
         (self.folder / "request.json").write_text(json.dumps(payload), encoding="utf-8")
         worker = Path(__file__).resolve().parents[1] / "scene_worker.py"
@@ -170,6 +183,14 @@ class SceneJob:
             )
         if self.contract.get("part_id") and result["frames"] != self.frames:
             raise ValueError("Independent part tasks cannot change the shared timeline")
+        if result.get("settings", {}).get("frames") != result["frames"]:
+            raise ValueError("Candidate scene settings disagree with its timeline")
+        if not self.contract.get("allow_scene_settings") and any(
+            result["settings"].get(key) != value
+            for key, value in self.settings_before.items()
+            if key not in {"frames", "world_revision"}
+        ):
+            raise ValueError("Candidate changed protected shared scene settings")
         path = Path(result["blend"]).resolve()
         if path.parent != self.folder.resolve() or not path.is_file():
             raise ValueError("Invalid isolated output path")
@@ -185,12 +206,15 @@ class SceneJob:
             "lights",
             "images",
             "curves",
+            "worlds",
         )
         resources_before = {name: set(getattr(bpy.data, name)) for name in registries}
         try:
             with bpy.data.libraries.load(str(path), link=False) as (src, dest):
                 dest.objects = list(result["objects"])
+                dest.worlds = [result["world"]] if result.get("world") else []
             loaded = list(dest.objects)
+            candidate_world = dest.worlds[0] if dest.worlds else None
             if any(o is None for o in loaded):
                 raise ValueError("Candidate object is missing")
             by_id = {o.get("ama_asset_id"): o for o in loaded}
@@ -202,15 +226,18 @@ class SceneJob:
             # An unlinked object has no evaluated dependency graph. Validate in a
             # temporary scene so modifiers and required names cannot evade gates.
             validation_scene = bpy.data.scenes.new("AI Candidate Validation")
-            validation_scene.frame_start, validation_scene.frame_end = result["frames"]
-            validation_scene.unit_settings.scale_length = self.scene_before["unit_scale"]
+            from .scene_state import apply
+
+            apply(validation_scene, result["settings"], loaded, world=candidate_world)
             for obj in loaded:
                 validation_scene.collection.objects.link(obj)
             name_map = {obj.name: name for obj, name in zip(loaded, result["objects"])}
             with bpy.context.temp_override(
                 scene=validation_scene, view_layer=validation_scene.view_layers[0]
             ):
-                validation_scene.frame_set(self.scene_before["current_frame"])
+                validation_scene.frame_set(
+                    self.scene_before["current_frame"], subframe=self.scene_before["subframe"]
+                )
                 report = evaluate(loaded, self.contract, name_map=name_map)
                 for check in self.contract_checks:
                     subset = [o for o in loaded if o.get("ama_asset_id") in check["asset_ids"]]
@@ -225,6 +252,9 @@ class SceneJob:
                     + "; ".join(report["errors"])
                 )
         except Exception:
+            if validation_scene:
+                bpy.data.scenes.remove(validation_scene)
+                validation_scene = None
             for obj in loaded:
                 if obj:
                     bpy.data.objects.remove(obj, do_unlink=True)
@@ -238,17 +268,17 @@ class SceneJob:
             if validation_scene:
                 bpy.data.scenes.remove(validation_scene)
         # Nothing mutates source objects until every candidate and revision check passes.
-        for obj in loaded:
-            collection.objects.link(obj)
         remapped = []
         try:
             for old in self.objects:
                 new = by_id[old["ama_asset_id"]]
-                for owner in list(old.users_collection):
-                    if new.name not in owner.objects:
-                        owner.objects.link(new)
+                # user_remap transfers collection membership too. Linking first
+                # creates duplicate references and leaks user counts in Blender 3.6.
                 old.user_remap(new)
                 remapped.append((old, new))
+            for obj in loaded:
+                if obj.name not in collection.objects:
+                    collection.objects.link(obj)
         except Exception:
             # Originals still exist until every reference update has succeeded.
             for old, new in reversed(remapped):
@@ -264,6 +294,10 @@ class SceneJob:
             bpy.data.objects.remove(old, do_unlink=True)
             new.name = name
         bpy.context.scene.frame_start, bpy.context.scene.frame_end = result["frames"]
+        if self.contract.get("allow_scene_settings"):
+            apply(bpy.context.scene, result["settings"], loaded, world=candidate_world)
+        elif candidate_world and candidate_world.users == 0:
+            bpy.data.worlds.remove(candidate_world)
         bpy.context.view_layer.update()
         self.quality = dict(report, fingerprint=fingerprint(loaded))
         return loaded

@@ -26,21 +26,32 @@ def custom_values(value):
         return {}
 
 
-def rna_values(value):
+def rna_values(value, _depth=0):
     result = {}
     for prop in value.bl_rna.properties:
         name = prop.identifier
-        if (
-            name
-            in {"rna_type", "name", "name_full", "execution_time", "is_active", "is_override_data"}
-            or prop.type == "COLLECTION"
-        ):
+        if name in {
+            "rna_type",
+            "id_data",
+            "name",
+            "name_full",
+            "execution_time",
+            "is_active",
+            "is_override_data",
+        }:
             continue
         try:
             item = getattr(value, name)
             if prop.type == "POINTER":
                 if isinstance(item, bpy.types.ID):
-                    result[name] = item.get("ama_asset_id", item.name)
+                    result[name] = socket_value(item)
+                elif item is not None and _depth < 5:
+                    # GN 5.2 sockets, color ramps, curve mappings, camera DOF,
+                    # constraint targets: these are nested RNA, not IDProperties.
+                    result[name] = rna_values(item, _depth + 1)
+            elif prop.type == "COLLECTION":
+                if name in {"elements", "curves", "points", "targets"} and _depth < 5:
+                    result[name] = [rna_values(v, _depth + 1) for v in item]
             elif getattr(prop, "is_array", False):
                 result[name] = list(item)
             elif isinstance(item, (str, int, float, bool)):
@@ -110,6 +121,21 @@ def socket_value(value):
         result = {"id": value.get("ama_asset_id", value.name)}
         if isinstance(value, bpy.types.Object):
             result["transform"] = [list(row) for row in value.matrix_world]
+        elif isinstance(value, bpy.types.Image):
+            result.update(
+                source=value.source,
+                filepath=value.filepath,
+                colorspace=value.colorspace_settings.name,
+                alpha_mode=value.alpha_mode,
+                size=list(value.size),
+                dirty=value.is_dirty,
+            )
+            # Catch edits to generated/painted pixels, including repeated edits
+            # while is_dirty remains true. No disk cache is used for mutable data.
+            if value.has_data:
+                pixels = array("f", [0]) * len(value.pixels)
+                value.pixels.foreach_get(pixels)
+                result["pixels"] = hashlib.sha256(pixels.tobytes()).hexdigest()
         return result
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -127,6 +153,7 @@ def node_values(tree, seen=None):
         return {"reference": tree.name}
     seen.add(tree.as_pointer())
     return {
+        "animation": animation_values(tree),
         "nodes": [
             (
                 n.name,
@@ -292,12 +319,27 @@ def object_dependencies(objects):
     """Objects referenced outside the write scope cannot be remapped safely on commit."""
     refs = set()
 
-    def inspect(value):
+    def inspect(value, depth=0):
+        if depth > 6:
+            return
         for prop in value.bl_rna.properties:
-            if prop.type == "POINTER":
+            if prop.type == "POINTER" and prop.identifier not in {"rna_type", "id_data"}:
                 target = getattr(value, prop.identifier, None)
                 if isinstance(target, bpy.types.Object):
                     refs.add(target)
+                elif isinstance(target, bpy.types.Collection):
+                    refs.update(target.all_objects)
+                elif target is not None and not isinstance(target, bpy.types.ID):
+                    inspect(target, depth + 1)
+            elif prop.type == "COLLECTION" and prop.identifier == "targets":
+                for item in getattr(value, prop.identifier):
+                    inspect(item, depth + 1)
+        # Legacy GN socket object/collection inputs live in custom properties.
+        for item in custom_values(value).values():
+            if isinstance(item, bpy.types.Object):
+                refs.add(item)
+            elif isinstance(item, bpy.types.Collection):
+                refs.update(item.all_objects)
 
     def tree_refs(tree, seen):
         if tree is None or tree.as_pointer() in seen:
@@ -314,6 +356,10 @@ def object_dependencies(objects):
     for obj in objects:
         if obj.parent:
             refs.add(obj.parent)
+        if obj.instance_collection:
+            refs.update(obj.instance_collection.all_objects)
+        if obj.type in {"CAMERA", "LIGHT"}:
+            inspect(obj.data)
         for value in list(obj.modifiers) + list(obj.constraints):
             inspect(value)
             tree_refs(getattr(value, "node_group", None), set())
@@ -337,11 +383,41 @@ def scene_revision(scene):
     return {
         "frames": [scene.frame_start, scene.frame_end],
         "current_frame": scene.frame_current,
+        "subframe": scene.frame_subframe,
         "fps": scene.render.fps,
         "fps_base": scene.render.fps_base,
         "unit_scale": scene.unit_settings.scale_length,
         "unit_system": scene.unit_settings.system,
+        "resolution": [
+            scene.render.resolution_x,
+            scene.render.resolution_y,
+            scene.render.resolution_percentage,
+        ],
+        "engine": scene.render.engine,
+        "film_transparent": scene.render.film_transparent,
+        "color_management": [
+            scene.view_settings.view_transform,
+            scene.view_settings.look,
+            scene.view_settings.exposure,
+            scene.view_settings.gamma,
+        ],
+        "camera": scene.camera.get("ama_asset_id", scene.camera.name) if scene.camera else None,
+        "world": (rna_values(scene.world), node_values(scene.world.node_tree))
+        if scene.world
+        else None,
     }
+
+
+def delivery_revision(objects, scene=None):
+    """Approval/recovery includes the timeline, units and presentation, not just meshes."""
+    return hashlib.sha256(
+        json.dumps(
+            {"objects": fingerprint(objects), "scene": scene_revision(scene or bpy.context.scene)},
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def check_region(objects, regions):
@@ -386,7 +462,14 @@ def region_preserved(before, after, regions):
                 raise ValueError("Generated code modified vertices outside the selected region")
         if old.matrix_world != new.matrix_world:
             raise ValueError("A region edit cannot transform the entire object")
-        if [rna_values(m) for m in old.modifiers] != [rna_values(m) for m in new.modifiers]:
+
+        def modifier_values(obj):
+            return [
+                (rna_values(m), custom_values(m), node_values(getattr(m, "node_group", None)))
+                for m in obj.modifiers
+            ]
+
+        if modifier_values(old) != modifier_values(new):
             raise ValueError("A vertex region edit cannot change global modifiers")
         if animation_values(old) != animation_values(new) or [
             rna_values(c) for c in old.constraints
@@ -442,3 +525,30 @@ def region_preserved(before, after, regions):
             if i not in selected_faces
         ):
             raise ValueError("Region edit changed material assignment outside selected faces")
+
+        def attributes(obj):
+            return {
+                a.name: a
+                for a in obj.data.attributes
+                if a.name not in {"position", ".edge_verts", ".corner_vert", ".corner_edge"}
+                and not a.name.startswith(".select")
+            }
+
+        a_attrs, b_attrs = attributes(old), attributes(new)
+        if set(a_attrs) != set(b_attrs):
+            raise ValueError("Region edit changed mesh attribute structure")
+        protected = {
+            "POINT": [v.index for v in old.data.vertices if v.index not in selected],
+            "EDGE": [e.index for e in old.data.edges if not set(e.vertices) <= selected],
+            "FACE": [p.index for p in old.data.polygons if p.index not in selected_faces],
+            "CORNER": protected_loops,
+        }
+        for name, a in a_attrs.items():
+            b = b_attrs[name]
+            if (a.domain, a.data_type, len(a.data)) != (b.domain, b.data_type, len(b.data)):
+                raise ValueError("Region edit changed mesh attribute layout: " + name)
+            indices = protected.get(a.domain, range(len(a.data)))
+            if any(rna_values(a.data[i]) != rna_values(b.data[i]) for i in indices):
+                raise ValueError(
+                    "Region edit changed attributes outside the selected region: " + name
+                )

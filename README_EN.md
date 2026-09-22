@@ -1,6 +1,6 @@
 > [中文](README.md) | English
 
-# AI in Blender · Agent Platform 3.2
+# AI in Blender · Agent Platform 3.3
 
 A persistent Blender agent platform with multi-turn dialogue, source-backed memory,
 multimodal references, concurrent independent experts and checked scene branches.
@@ -11,15 +11,19 @@ native integration with every vendor.
 
 ## Features
 
-Version 3.2 fixes the published Blender 3.6 preset regression and strengthens the
-full lifecycle: scoped memory evolution and forget suppression, complete-turn
-budgeted compaction, independent failure scheduling, persistent call receipts,
-GET-only recovery of known jobs, hashed outputs, evaluated candidate checks,
-inherited contracts, review-repair-review, and precise edit/import compensation.
+Version 3.3 targets official Blender 5.2.2 LTS while retaining the legacy 3.6 package.
+It adapts Geometry Nodes RNA inputs, checks collapsed UVs/material dependencies and
+bound animation channels, samples animated geometry, and adds real Cycles CPU material
+evidence. Explicit lighting tasks can commit world/camera/presentation settings.
+GLB output is checked before replacement, with a native scene delivered alongside it.
+Memory v3 retains execution event history, rejects stale compression after memory
+edits, and handles conversations exceeding 10,000 turns without skipping the oldest
+uncompressed prefix. Terrain resolution and surface scatter now follow their actual
+parameters and target geometry. See the [3.3 audit](docs/QUALITY_AUDIT_3_3.md).
 See [workflow lifecycles](docs/WORKFLOW_LIFECYCLES.md) and
 [validation](docs/VALIDATION.md) for implementation details and evidence boundaries.
 
-- Planner, modeling, material, rigging, animation and review roles, geometry inspection and export.
+- Planner, modeling, material, rigging, animation, lighting/camera and review roles, geometry inspection and export.
 - Capability-based routing to different providers and models.
 - SQLite projects, multiple persistent conversations, versioned session/project/personal memories.
 - Automatic source-linked semantic compression with explicit extractive fallback; raw turns remain intact.
@@ -40,8 +44,8 @@ See [workflow lifecycles](docs/WORKFLOW_LIFECYCLES.md) and
 
 Run `python tools/build.py` and install one ZIP:
 
-- `dist/ai-in-blender-3.2.0-extension.zip`: Blender 4.2+, Get Extensions → Install from Disk.
-- `dist/ai-in-blender-3.2.0-legacy.zip`: Blender 3.6+, Add-ons → Install / Install from Disk.
+- `dist/ai-in-blender-3.3.0-extension.zip`: Blender 4.2+, Get Extensions → Install from Disk.
+- `dist/ai-in-blender-3.3.0-legacy.zip`: Blender 3.6+, Add-ons → Install / Install from Disk.
 
 Disable the old single-file add-on before upgrading. No runtime pip dependencies.
 Open the **AI Model** sidebar and try **Offline Demo** to create a mechanical asset
@@ -78,17 +82,22 @@ and [design](docs/PLATFORM_DESIGN.md) (Chinese).
 
 ## Validation and limits
 
-Windows/Blender 5.1.1 is actually tested. Blender 3.6 and 4.x compatibility branches
-and a Linux CI matrix are included; unexecuted matrix entries are not proof of support.
+Local Windows baselines are Blender 3.6.23, 5.1.1 and 5.2.2 LTS. CI covers Linux
+3.6.23, 4.2.23, 4.5.14, 5.1.2 and 5.2.2, plus macOS Apple silicon 5.2.2.
+Core tests run on Windows, Linux and macOS with Python 3.10/3.13.
+Consult the exact commit's Actions results; an unexecuted matrix is not proof of support.
 Versions before 3.6 are unsupported. See [validation](docs/VALIDATION.md).
 
 No paid live model calls were used. Native adapters use local HTTP fixtures for
 verification; real service availability and generation quality require credentials
 and service-level validation. Video/world engines require a server implementing the
 [bridge contract](docs/PROVIDERS.md). World outputs are imported assets, not a generic
-world simulation runtime. A Vision reviewer receives a real Workbench geometry preview;
-a text-only reviewer does not claim image inspection. Workbench evidence does not prove
-final PBR lighting, texture fidelity or every animation frame. Bridge v2 uploads actual
+world simulation runtime. Vision review receives budgeted real previews, with Cycles
+studio material views for material contracts and labeled frame samples for animation.
+Text-only review does not claim image inspection. Finite samples do not prove final
+lighting, artistic fidelity or every animation frame. Native `.blend` delivery retains
+procedural data that GLB cannot express; unpacked textures/caches remain file references.
+Bridge v2 uploads actual
 conditioning bytes; native text-only adapters reject unsupported binary attachments.
 
 The Python guard and separate Blender process are **not an OS sandbox**. The process

@@ -3,8 +3,25 @@
 from contextlib import contextmanager
 from pathlib import Path
 import re
+import uuid
 import bpy
 import bmesh
+
+
+def set_geometry_input(modifier, identifier, value):
+    """Set a Geometry Nodes interface socket on both 3.6-5.1 and 5.2+."""
+    if modifier.type != "NODES" or modifier.node_group is None:
+        raise ValueError("A Geometry Nodes modifier with a node group is required")
+    if hasattr(modifier, "properties"):
+        entry = getattr(modifier.properties.inputs, identifier, None)
+        if entry is None or not hasattr(entry, "value"):
+            raise ValueError("Unknown Geometry Nodes input identifier: " + identifier)
+        entry.value = value
+    else:
+        if identifier not in modifier:
+            raise ValueError("Unknown Geometry Nodes input identifier: " + identifier)
+        modifier[identifier] = value
+    modifier.id_data.update_tag()
 
 
 def safe_filename(value):
@@ -71,11 +88,31 @@ def export_objects(path, objects, fmt="glb", engine=""):
         raise ValueError("No objects to export")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    from .quality import evaluate
+
+    geometry = any(o.type in {"MESH", "CURVE", "SURFACE", "FONT", "META"} for o in objects)
+    quality = evaluate(objects, {"require_geometry": geometry})
+    if not quality["passed"]:
+        raise ValueError("Export blocked by native quality: " + "; ".join(quality["errors"]))
     with selected_only(objects):
         if fmt in {"glb", "gltf"}:
-            result = bpy.ops.export_scene.gltf(
-                filepath=str(path), export_format="GLB", use_selection=True
-            )
+            from ..core.gltf import inspect_glb
+
+            temporary = path.with_name(path.stem + "-" + uuid.uuid4().hex[:12] + ".glb")
+            try:
+                result = bpy.ops.export_scene.gltf(
+                    filepath=str(temporary),
+                    export_format="GLB",
+                    use_selection=True,
+                    export_cameras=True,
+                    export_lights=True,
+                )
+                if "FINISHED" not in result or not temporary.is_file():
+                    raise RuntimeError("GLB exporter did not produce a candidate")
+                inspect_glb(temporary, require_mesh=geometry)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
         elif fmt == "fbx":
             options = {"filepath": str(path), "use_selection": True, "use_mesh_modifiers": True}
             if engine == "unreal":
@@ -98,6 +135,30 @@ def export_objects(path, objects, fmt="glb", engine=""):
     if "FINISHED" not in result or not path.is_file():
         raise RuntimeError("Exporter did not produce the requested file")
     return str(path.resolve())
+
+
+def export_native_scene(path, objects):
+    """Preserve Blender-native shaders, world and actions alongside the interchange file."""
+    from .scene_state import capture, apply
+
+    objects = list(objects)
+    source = bpy.context.scene
+    path = Path(path).resolve()
+    temporary = path.with_name(path.stem + "-" + uuid.uuid4().hex[:12] + ".blend")
+    scene = bpy.data.scenes.new("AI Studio Deliverable")
+    try:
+        for obj in objects:
+            scene.collection.objects.link(obj)
+        apply(scene, capture(source, objects), objects, world=source.world)
+        scene.frame_set(source.frame_current, subframe=source.frame_subframe)
+        bpy.data.libraries.write(str(temporary), {scene}, path_remap="ABSOLUTE", compress=True)
+        if not temporary.is_file() or temporary.stat().st_size < 12:
+            raise RuntimeError("Native scene exporter produced no file")
+        temporary.replace(path)
+        return str(path)
+    finally:
+        bpy.data.scenes.remove(scene)
+        temporary.unlink(missing_ok=True)
 
 
 def import_artifact(artifact, collection=None):

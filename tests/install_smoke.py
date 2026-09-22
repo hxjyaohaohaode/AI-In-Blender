@@ -22,7 +22,10 @@ info = next(
     and any(isinstance(t, ast.Name) and t.id == "bl_info" for t in n.targets)
 )
 version = ".".join(map(str, info["version"]))
-archive = root / "dist" / f"ai-in-blender-{version}-legacy.zip"
+archive = (
+    Path(os.environ.get("AI_IN_BLENDER_PACKAGE_DIR", root / "dist"))
+    / f"ai-in-blender-{version}-legacy.zip"
+)
 assert "FINISHED" in bpy.ops.preferences.addon_install(filepath=str(archive), overwrite=True)
 addon_utils.enable("ai_modeling_assistant", default_set=True)
 import ai_modeling_assistant

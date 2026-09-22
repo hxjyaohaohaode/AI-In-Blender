@@ -5,10 +5,11 @@ import os
 from pathlib import Path
 import uuid
 import bpy
-from ..core.memory import MemoryStore, tokens
+from ..core.memory import MemoryStore, RevisionConflict, tokens
 from ..core.context import (
     build_context,
     compression_source,
+    compression_request,
     validate_summary,
     extractive_summary,
     apply_proposals,
@@ -64,7 +65,8 @@ def identity(scene, db):
 def refresh(scene):
     with store() as db:
         project_id, thread_id = identity(scene, db)
-        turns = db.turns(thread_id)
+        turns = db.turns(thread_id, limit=4)
+        total_turns = db.turn_count(thread_id)
         scene.ama_props.chat_preview = "\n\n".join(
             f"{t['role']}: {t['content'][:800]}" for t in turns[-4:]
         )
@@ -72,7 +74,7 @@ def refresh(scene):
         candidates = sum(m["status"] in {"candidate", "conflict"} for m in memories)
         confirmed = sum(m["status"] == "verified" for m in memories)
         scene.ama_props.memory_status = (
-            f"{confirmed} confirmed · {candidates} need review · {len(turns)} stored turns"
+            f"{confirmed} confirmed · {candidates} need review · {total_turns} stored turns"
         )
         _ui_cache[scene.as_pointer()] = {
             "memories": memories,
@@ -116,7 +118,12 @@ class Dialogue:
             self.submit(
                 "compress",
                 COMPRESSION_SYSTEM,
-                [{"role": "user", "content": json.dumps(self.source, ensure_ascii=False)}],
+                [
+                    {
+                        "role": "user",
+                        "content": json.dumps(compression_request(self.source), ensure_ascii=False),
+                    }
+                ],
             )
         else:
             self.respond()
@@ -192,12 +199,22 @@ class Dialogue:
                     mode = "semantic"
                 except ValueError:
                     body, mode = extractive_summary(self.source), "extractive"
-                db.save_summary(self.thread_id, self.source["source_ids"], body, mode=mode)
-                db.event(
-                    self.project_id,
-                    "context_compressed",
-                    {"mode": mode, "through_id": max(self.source["source_ids"])},
-                )
+                try:
+                    db.save_summary(
+                        self.thread_id,
+                        self.source["source_ids"],
+                        body,
+                        mode=mode,
+                        expected_epoch=self.source["memory_epoch"],
+                    )
+                except RevisionConflict:
+                    db.event(self.project_id, "stale_compression_discarded", {})
+                else:
+                    db.event(
+                        self.project_id,
+                        "context_compressed",
+                        {"mode": mode, "through_id": max(self.source["source_ids"])},
+                    )
             # Catch up incrementally after long conversations without an unbounded
             # maintenance loop or dropping the oldest unsummarized giant turn.
             with store() as db:
@@ -210,7 +227,14 @@ class Dialogue:
                 self.submit(
                     "compress",
                     COMPRESSION_SYSTEM,
-                    [{"role": "user", "content": json.dumps(self.source, ensure_ascii=False)}],
+                    [
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                compression_request(self.source), ensure_ascii=False
+                            ),
+                        }
+                    ],
                 )
             else:
                 self.respond()

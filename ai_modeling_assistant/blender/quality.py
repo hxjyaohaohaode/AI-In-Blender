@@ -8,11 +8,55 @@ import bpy
 
 
 def evaluate(objects, contract=None, *, name_map=None):
+    """Validate the evaluated deliverable at bounded temporal samples, restoring time."""
+    from .quality_checks import animation_evidence, sample_frames
+    from .revision import fingerprint
+
+    objects, contract = list(objects), contract or {}
+    scene = bpy.context.scene
+    original_frame, original_subframe = scene.frame_current, scene.frame_subframe
+    animation = animation_evidence(objects)
+    frames = sample_frames(scene, contract, animation)
+    results = []
+    try:
+        for frame in frames:
+            scene.frame_set(frame)
+            results.append((frame, _evaluate_frame(objects, contract, name_map=name_map)))
+    finally:
+        scene.frame_set(original_frame, subframe=original_subframe)
+    report = dict(results[0][1])
+    report["fingerprint"] = fingerprint(objects)
+    report["sampled_frames"] = frames
+    report["animation"] = animation
+    report["errors"] = list(animation["errors"])
+    report["warnings"] = []
+    report["temporal_checks"] = []
+    for frame, item in results:
+        report["temporal_checks"].append(
+            {"frame": frame, "passed": item["passed"], "meshes": item["meshes"]}
+        )
+        for level in ("errors", "warnings"):
+            report[level].extend(
+                (f"Frame {frame}: " if len(frames) > 1 else "") + e for e in item[level]
+            )
+    if contract.get("require_animation"):
+        start, end = contract.get("animation_range", [scene.frame_start, scene.frame_end])
+        times = animation["keyframe_times"]
+        if len(times) < 2:
+            report["errors"].append(
+                "No animation keyframes across at least two distinct times in the deliverable"
+            )
+        elif times[0] > start or times[-1] < end:
+            report["errors"].append("Animation keyframes do not cover the required delivery range")
+    report["passed"] = not report["errors"]
+    return report
+
+
+def _evaluate_frame(objects, contract=None, *, name_map=None):
     """Mandatory native gates. Artistic judgement is a separate evidence type."""
     import bmesh
     import math
     from mathutils import Vector
-    from .revision import fingerprint
 
     contract = contract or {}
     objects = list(objects)
@@ -22,10 +66,12 @@ def evaluate(objects, contract=None, *, name_map=None):
         "errors": [],
         "warnings": [],
         "meshes": [],
-        "fingerprint": fingerprint(objects),
         "visual_review": "unverified",
     }
-    meshes = [o for o in objects if o.type == "MESH"]
+    meshes = [o for o in objects if o.type in {"MESH", "CURVE", "SURFACE", "FONT", "META"}]
+    for obj in objects:
+        if not all(math.isfinite(c) for row in obj.matrix_world for c in row):
+            report["errors"].append(obj.name + ": non-finite transform")
     if contract.get("require_geometry", True) and not meshes:
         report["errors"].append("No mesh output")
     for obj in meshes:
@@ -33,7 +79,7 @@ def evaluate(objects, contract=None, *, name_map=None):
         evaluated = None
         try:
             source = obj.data
-            if obj.name in bpy.context.view_layer.objects and obj.modifiers:
+            if obj.name in bpy.context.view_layer.objects:
                 evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
                 source = evaluated.to_mesh()
             mesh.from_mesh(source)
@@ -81,6 +127,30 @@ def evaluate(objects, contract=None, *, name_map=None):
                 report["errors"].append(obj.name + ": unassigned material faces")
             if contract.get("require_uv") and not source.uv_layers:
                 report["errors"].append(obj.name + ": missing UV map")
+            elif contract.get("require_uv"):
+                uv = source.uv_layers.active.data
+                collapsed = 0
+                for face in source.polygons:
+                    coords = [uv[i].uv for i in face.loop_indices]
+                    area = (
+                        abs(
+                            sum(
+                                a.x * b.y - b.x * a.y
+                                for a, b in zip(coords, coords[1:] + coords[:1])
+                            )
+                        )
+                        / 2
+                    )
+                    collapsed += area <= 1e-12
+                if collapsed:
+                    report["errors"].append(f"{obj.name}: {collapsed} faces have collapsed UVs")
+            from .quality_checks import material_issues
+
+            for material in set(m for m in source.materials if m):
+                report["errors" if contract.get("require_materials") else "warnings"].extend(
+                    obj.name + ": " + material.name + ": " + error
+                    for error in material_issues(material)
+                )
             if any(
                 not math.isfinite(c)
                 for layer in source.uv_layers
@@ -88,7 +158,8 @@ def evaluate(objects, contract=None, *, name_map=None):
                 for c in uv.uv
             ):
                 report["errors"].append(obj.name + ": non-finite UV coordinates")
-            positions = [obj.matrix_world @ vertex.co for vertex in source.vertices]
+            matrix = evaluated.matrix_world if evaluated else obj.matrix_world
+            positions = [matrix @ vertex.co for vertex in source.vertices]
             low = [min((p[i] for p in positions), default=0) for i in range(3)]
             high = [max((p[i] for p in positions), default=0) for i in range(3)]
             if max(high[i] - low[i] for i in range(3)) > contract.get("max_extent", 1e9):
@@ -113,15 +184,6 @@ def evaluate(objects, contract=None, *, name_map=None):
         o.type == "ARMATURE" and o.data.bones for o in objects
     ):
         report["errors"].append("No nonempty armature in the deliverable")
-    if contract.get("require_animation"):
-        from .revision import animation_values
-
-        animations = [animation_values(o) for o in objects]
-        if not any(
-            a and (a["action"] or any(strip[1] for track in a["nla"] for strip in track[2]))
-            for a in animations
-        ):
-            report["errors"].append("No animation keyframes in the deliverable")
     for name in contract.get("required_objects", []):
         if not any(name_map.get(o.name, o.name) == name for o in objects):
             report["errors"].append("Missing required object: " + name)
