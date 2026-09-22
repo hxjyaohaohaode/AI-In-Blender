@@ -15,15 +15,15 @@ jobs:
         os: [ubuntu-24.04, windows-latest, macos-15]
         python: ['3.10', '3.13']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install ruff==0.16.7
       - run: ruff check ai_modeling_assistant tests tools
       - run: python -m unittest discover -s tests -v
       - run: python tools/build.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: addon-installers-${{ matrix.os }}-${{ matrix.python }}
           path: dist/
@@ -35,8 +35,8 @@ jobs:
       matrix:
         version: ['3.6.23', '4.2.23', '4.5.14', '5.1.2', '5.2.2']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.10'
       - run: sudo apt-get update && sudo apt-get install -y libxi6 libxrender1 libxxf86vm1 libxfixes3 libxkbcommon0 libgl1 libegl1 libsm6 libasound2t64
@@ -55,7 +55,7 @@ jobs:
           tar -xf "${archive}" -C blender-test --strip-components=1
       - name: Validate source and installed packages
         run: python tools/validate_blender.py --blender ./blender-test/blender
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: blender-${{ matrix.version }}-validation
@@ -64,8 +64,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Download verified Blender 5.2.2 for Apple silicon
@@ -82,7 +82,7 @@ jobs:
           ditto "${RUNNER_TEMP}/blender-mount/Blender.app" blender-test/Blender.app
       - name: Validate source and installed packages on macOS
         run: python tools/validate_blender.py --blender ./blender-test/Blender.app/Contents/MacOS/Blender
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: blender-5.2.2-macos-validation
