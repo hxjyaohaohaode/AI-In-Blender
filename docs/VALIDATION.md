@@ -1,4 +1,4 @@
-# Reproducible validation: 3.2.0
+# Reproducible validation: 3.3.0
 
 Original baseline: `3e0e01f`. First published candidate: `207cfc8`. The initial
 GitHub failure was seven Blender 3.6 material-preset fallbacks raising `NameError`
@@ -25,23 +25,26 @@ python tools/validate_blender.py --blender /absolute/path/to/blender
 `validate_blender.py` builds both ZIPs, runs the source integration suite, installs
 the legacy ZIP, installs and exercises the actual extension namespace on Blender
 4.2+, and validates the manifest. It creates isolated configuration, scripts and
-extensions under `artifacts/validation/install-<id>`. Its `checks.json` records each
+extensions and independently built packages under `artifacts/validation/install-<id>`.
+Concurrent version validators never overwrite a shared package. Its `checks.json` records each
 exit code and log. The integration suite writes `blender-<version>.json` with test
 counts, exceptions and success. A failing test or installation fails the command.
 
 ## CI matrix and evidence
 
-- Core: Windows and Ubuntu, Python 3.10 and 3.13, pinned Ruff.
-- Blender: Linux 3.6.23, 4.2.0, 4.5.3 and 5.1.1; verified official download hashes.
+- Core: Windows, Ubuntu and macOS Apple silicon, Python 3.10 and 3.13, pinned Ruff.
+- Blender: Linux 3.6.23, 4.2.23, 4.5.14, 5.1.2 and 5.2.2; verified official download hashes.
+- Blender: macOS Apple silicon 5.2.2, official DMG and verified SHA-256.
 - Legacy installation: every Blender matrix entry.
-- Real extension installation and packaged workers: 4.2.0, 4.5.3 and 5.1.1.
-- Host validation: Windows Blender 3.6.23 (`e467db79ca8c`) and 5.1.1 (`b70da489d7f4`),
-  45 integration tests each, with real legacy installs; 5.1 also installs the extension.
-- Core suite: 72 tests covering memory, execution contracts, network protocols and packages.
+- Real extension installation and packaged workers: every Blender matrix entry from 4.2 onward.
+- Host baselines: Windows Blender 3.6.23 (`e467db79ca8c`), 5.1.1 (`b70da489d7f4`)
+  and 5.2.2 (`d13f752e3b9c`), with real legacy installs and extension installs where applicable.
+- Blender suite: 67 integration cases plus the quick-build/material subcases.
+- Core suite: 85 tests covering memory, execution contracts, network protocols, GLB and packages.
 
 Use [Actions](https://github.com/hxjyaohaohaode/AI-In-Blender/actions) for the result
 of a specific commit. Matrix logs and package archives are uploaded as artifacts.
-The final local audit is `artifacts/validation/final-results.json`; ignored artifacts
+The 3.3 local audit is `artifacts/validation/audit-3.3-results.json`; ignored artifacts
 are not source-controlled. A matrix definition by itself is not a pass certificate.
 
 ## Failure cases covered
@@ -62,12 +65,25 @@ are not source-controlled. A matrix definition by itself is not a pass certifica
 - Parallel parts, separate workflows, bounded repair followed by independent
   re-review, persistent call budgets, scene process deadlines and checkpoint recovery.
 - Reproducible package layouts and actual installed-worker execution.
+- Blender 5.2 Geometry Nodes inputs; camera focus dependencies; color ramps and
+  repeated image painting; protected generic attributes; source-frozen audio input.
+- Material output/texture dependencies, collapsed UVs, real Cycles evidence, bound
+  action/shape-key animation, temporal bounds and restoration of the active subframe.
+- Explicit world/camera/scene setting commits and refusal to silently lose unsupported
+  render/compositor/sequencer changes; native `.blend` scene delivery.
+- GLB structure/embedded dependencies, buffer/accessor bounds and preservation of an
+  existing delivery after validation failure.
+- Transactional v2-to-v3 memory migration, stale compaction after forgetting, immutable
+  execution event history, full history export and 10,012-turn context/compaction.
+- Terrain resolution, evaluated sloped-surface scatter and local random-state isolation.
 
 ## Limits of this evidence
 
 Local HTTP fixtures exercise network protocols and byte transfers; they do not
-measure paid model availability or generated artistic quality. Rendering evidence
-is Workbench geometry, not final PBR/animation quality. Interactive drawing/capture
-needs manual GUI verification. macOS and unlisted Blender versions are not claimed
-tested. The process boundary is not an OS security sandbox. See
+measure paid model availability or generated artistic quality. Evidence includes
+Workbench geometry, bounded Cycles CPU studio material previews and finite animation
+samples, not final lighting or exhaustive animation quality. Interactive drawing/capture
+needs manual GUI verification. Unlisted Blender versions/platforms are not claimed
+tested. A declared matrix must have a successful run on the exact commit before it
+counts as verification. The process boundary is not an OS security sandbox. See
 [workflow contracts](WORKFLOW_LIFECYCLES.md) for recovery limits and invariants.

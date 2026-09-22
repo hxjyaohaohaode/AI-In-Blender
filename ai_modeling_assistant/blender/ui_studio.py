@@ -135,6 +135,7 @@ class AMA_PT_MainPanel(Panel):
         views = layout.row(align=True)
         views.operator("ama.open_preview", text="Reverse / 背面").view = "back"
         views.operator("ama.open_preview", text="Top / 顶面").view = "top"
+        layout.operator("ama.open_preview", text="Material / 材质实渲").view = "material"
         demo = row.row()
         demo.enabled = not working
         demo.operator("ama.offline_demo", text="Offline Demo", icon="MESH_ICOSPHERE")

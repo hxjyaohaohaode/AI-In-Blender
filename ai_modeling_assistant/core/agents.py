@@ -24,8 +24,13 @@ EXPERTS = {
     "world": ("world", "World generation", "Generate a world or scene asset."),
     "inspector": ("builtin", "Geometry inspection", "Inspect mesh topology and report issues."),
     "exporter": ("builtin", "Export", "Export the workflow objects as GLB."),
+    "lighting": (
+        "chat",
+        "Lighting / camera",
+        "Set up lights, cameras and presentation. Scene settings require an explicit allow_scene_settings contract.",
+    ),
 }
-CODE_EXPERTS = {"modeler", "material", "rigger", "animator"}
+CODE_EXPERTS = {"modeler", "material", "rigger", "animator", "lighting"}
 TERMINAL = {"succeeded", "failed", "cancelled", "blocked"}
 
 
@@ -97,6 +102,9 @@ class Workflow:
                 "require_animation",
                 "min_faces",
                 "max_faces",
+                "animation_range",
+                "sample_frames",
+                "allow_scene_settings",
             }
             if set(contract) - allowed:
                 raise ValueError("Unknown task contract fields")
@@ -107,6 +115,7 @@ class Workflow:
                 "require_uv",
                 "require_rig",
                 "require_animation",
+                "allow_scene_settings",
             ):
                 if key in contract and type(contract[key]) is not bool:
                     raise ValueError(key + " must be a boolean")
@@ -141,6 +150,23 @@ class Workflow:
                 raise ValueError("Vertex limits are contradictory")
             if contract.get("min_faces", 0) > contract.get("max_faces", 1e9):
                 raise ValueError("Face limits are contradictory")
+            for key in ("animation_range", "sample_frames"):
+                if key in contract and (
+                    not isinstance(contract[key], list)
+                    or not contract[key]
+                    or len(contract[key]) > 12
+                    or any(
+                        type(f) is not int or not -1048574 <= f <= 1048574 for f in contract[key]
+                    )
+                    or contract[key] != sorted(set(contract[key]))
+                ):
+                    raise ValueError(key + " must be sorted distinct integer frames (at most 12)")
+            if "animation_range" in contract and len(contract["animation_range"]) != 2:
+                raise ValueError("animation_range needs a start and an end frame")
+            if contract.get("allow_scene_settings") and contract.get("part_id"):
+                raise ValueError(
+                    "Shared scene settings cannot be changed by independent part tasks"
+                )
             if (
                 "bounds_min" in contract
                 and "bounds_max" in contract
@@ -284,6 +310,12 @@ def planner_prompt(capabilities):
         "min_vertices: 0, max_vertices: 1000000, max_extent: 1000, required_objects: []}. "
         "Contracts can also specify bounds_min and bounds_max as [x,y,z] workspace limits, "
         "and anchor_object, anchor_position [x,y,z], anchor_tolerance for checked assembly interfaces. "
+        "Use require_animation with animation_range [start,end] for animation delivery; sample_frames "
+        "can specify up to 12 distinct frames for evaluated geometry checks. require_uv rejects "
+        "collapsed UV faces; require_materials checks connected outputs and missing textures. "
+        "Lighting/camera/presentation tasks may explicitly set allow_scene_settings:true to commit "
+        "world, camera, units, frame rate, color management and render resolution. These tasks must "
+        "depend on all parts and cannot use part_id. Other tasks preserve shared settings. "
         "Independent root parts with different part_id can run concurrently; all other scene changes "
         "are ordered. Contract dimensions are in Blender scene units. For 3D workflows include an inspector after geometry and before an exporter. For "
         "media-only workflows the generated media file is the output; do not add a GLB exporter. Include "

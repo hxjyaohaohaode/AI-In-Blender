@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest]
+        os: [ubuntu-24.04, windows-latest, macos-15]
         python: ['3.10', '3.13']
     steps:
       - uses: actions/checkout@v4
@@ -29,11 +29,11 @@ jobs:
           path: dist/
   blender:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        version: ['3.6.23', '4.2.0', '4.5.3', '5.1.1']
+        version: ['3.6.23', '4.2.23', '4.5.14', '5.1.2', '5.2.2']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,4 +59,31 @@ jobs:
         if: always()
         with:
           name: blender-${{ matrix.version }}-validation
+          path: artifacts/validation/
+  blender-macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download verified Blender 5.2.2 for Apple silicon
+        shell: bash
+        run: |
+          archive="blender-5.2.2-macos-arm64.dmg"
+          base="https://download.blender.org/release/Blender5.2"
+          curl --fail --retry 3 -LO "${base}/${archive}"
+          curl --fail --retry 3 -Lo checksums.txt "${base}/blender-5.2.2.sha256"
+          grep "${archive}$" checksums.txt | shasum -a 256 -c -
+          mkdir -p blender-test
+          hdiutil attach "${archive}" -nobrowse -mountpoint "${RUNNER_TEMP}/blender-mount"
+          trap 'hdiutil detach "${RUNNER_TEMP}/blender-mount"' EXIT
+          ditto "${RUNNER_TEMP}/blender-mount/Blender.app" blender-test/Blender.app
+      - name: Validate source and installed packages on macOS
+        run: python tools/validate_blender.py --blender ./blender-test/Blender.app/Contents/MacOS/Blender
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blender-5.2.2-macos-validation
           path: artifacts/validation/

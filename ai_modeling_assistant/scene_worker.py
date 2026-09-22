@@ -7,45 +7,11 @@ import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import bpy
-from mathutils import Vector
 from ai_modeling_assistant.blender.execution import CodeExecutor
 from ai_modeling_assistant.blender.quality import evaluate
 from ai_modeling_assistant.blender.revision import ensure_ids
-
-
-def render_evidence(objects, path, direction=(1.5, -2.4, 1.6)):
-    scene = bpy.context.scene
-    points = [
-        o.matrix_world @ Vector(corner)
-        for o in objects
-        if o.type == "MESH"
-        for corner in o.bound_box
-    ]
-    if not points:
-        return ""
-    center = sum(points, Vector()) / len(points)
-    radius = max((p - center).length for p in points) or 1
-    data = bpy.data.cameras.new("Quality Camera")
-    camera = bpy.data.objects.new("Quality Camera", data)
-    scene.collection.objects.link(camera)
-    camera.location = center + Vector(direction).normalized() * radius * 3.6
-    camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
-    data.lens = 45
-    scene.camera = camera
-    scene.render.engine = "BLENDER_WORKBENCH"
-    scene.display.shading.light = "STUDIO"
-    scene.display.shading.color_type = "MATERIAL"
-    scene.display.shading.show_shadows = True
-    scene.display.shading.show_cavity = True
-    scene.render.resolution_x = scene.render.resolution_y = 512
-    scene.render.resolution_percentage = 100
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.filepath = str(path)
-    bpy.ops.render.render(write_still=True)
-    scene.camera = None
-    bpy.data.objects.remove(camera, do_unlink=True)
-    bpy.data.cameras.remove(data)
-    return str(path)
+from ai_modeling_assistant.blender.evidence import render_evidence
+from ai_modeling_assistant.blender.scene_state import capture, apply, protected_settings
 
 
 def run(data, folder):
@@ -57,24 +23,40 @@ def run(data, folder):
     if source.exists():
         with bpy.data.libraries.load(str(source), link=False) as (src, dest):
             dest.objects = data["objects"]
+            dest.worlds = [data["world"]] if data.get("world") else []
         for obj in dest.objects:
             collection.objects.link(obj)
             obj.select_set(True)
         if dest.objects:
             bpy.context.view_layer.objects.active = dest.objects[0]
     scene = bpy.context.scene
-    scene.frame_start, scene.frame_end = data["frames"]
-    scene.unit_settings.scale_length = data.get("unit_scale", 1)
-    scene.render.fps = data.get("fps", 24)
-    scene.render.fps_base = data.get("fps_base", 1.0)
-    scene.frame_set(data.get("current_frame", 1))
+    world = dest.worlds[0] if source.exists() and dest.worlds else None
+    apply(scene, data["settings"], list(collection.objects), world=world)
+    scene.frame_set(data.get("current_frame", 1), subframe=data.get("current_subframe", 0))
+    before = capture(scene, list(collection.objects))
+    protected = protected_settings(scene)
     success, output = CodeExecutor.execute(
         data["code"], targets=list(collection.objects), collection=collection, timeout=15
     )
     if not success:
         return {"error": output}
+    after_protected = protected_settings(scene)
+    unsupported = [key for key in protected if protected[key] != after_protected[key]]
+    if unsupported:
+        return {
+            "error": "Unsupported shared scene settings changed; use Blender's native controls: "
+            + ", ".join(unsupported)
+        }
     objects = list(collection.all_objects)
     ensure_ids(objects)
+    settings = capture(scene, objects)
+    if not data.get("contract", {}).get("allow_scene_settings"):
+        changed = [key for key in before if key != "frames" and before[key] != settings[key]]
+        if changed:
+            return {
+                "error": "Task changed shared scene settings without allow_scene_settings: "
+                + ", ".join(changed)
+            }
     report = evaluate(objects, data.get("contract"))
     for check in data.get("contract_checks", []):
         targets = [o for o in objects if o.get("ama_asset_id") in check["asset_ids"]]
@@ -89,18 +71,49 @@ def run(data, folder):
             "quality": report,
         }
     output_path = folder / "candidate.blend"
-    bpy.data.libraries.write(str(output_path), set(objects))
-    previews = []
+    bpy.data.libraries.write(
+        str(output_path), set(objects) | ({scene.world} if scene.world else set())
+    )
+    previews, evidence_views = [], []
+
+    def evidence(name, direction, kind, *, material=False):
+        path = render_evidence(objects, folder / name, direction, material=material)
+        if path:
+            previews.append(path)
+            evidence_views.append({"path": path, "kind": kind, "frame": scene.frame_current})
+
     if data.get("render", True):
+        contracts = [data.get("contract", {})] + [
+            c["contract"] for c in data.get("contract_checks", [])
+        ]
+        if any(c.get("require_materials") for c in contracts):
+            evidence(
+                "preview-material.png",
+                (1.5, -2.4, 1.6),
+                "Cycles CPU studio material preview",
+                material=True,
+            )
         for name, direction in (
             ("preview.png", (1.5, -2.4, 1.6)),
             ("preview-back.png", (-1.5, 2.4, 1.6)),
             ("preview-top.png", (0.001, 0, 3)),
         ):
-            preview = render_evidence(objects, folder / name, direction)
-            if preview:
-                previews.append(preview)
-    preview = previews[0] if previews else ""
+            evidence(name, direction, "Workbench geometry preview")
+        frame, subframe = scene.frame_current, scene.frame_subframe
+        try:
+            for contract in contracts:
+                if contract.get("require_animation"):
+                    for sample in contract.get("animation_range", data["frames"]):
+                        scene.frame_set(sample)
+                        evidence(
+                            f"preview-frame-{sample}.png",
+                            (1.5, -2.4, 1.6),
+                            "Workbench animation sample",
+                        )
+                    break
+        finally:
+            scene.frame_set(frame, subframe=subframe)
+    preview = str(folder / "preview.png") if previews else ""
     return {
         "output": output,
         "blend": str(output_path),
@@ -108,7 +121,10 @@ def run(data, folder):
         "quality": report,
         "preview": preview,
         "previews": previews,
+        "evidence_views": evidence_views,
         "frames": [scene.frame_start, scene.frame_end],
+        "settings": settings,
+        "world": scene.world.name if scene.world else None,
     }
 
 

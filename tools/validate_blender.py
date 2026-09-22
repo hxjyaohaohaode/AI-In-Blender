@@ -22,9 +22,10 @@ def main():
     parser.add_argument("--blender", required=True, type=Path)
     args = parser.parse_args()
     blender = args.blender.resolve()
-    archive = build(ROOT / "dist")[1]
     profile = ROOT / "artifacts" / "validation" / ("install-" + uuid.uuid4().hex[:8])
     profile.mkdir(parents=True)
+    packages = profile / "packages"
+    archive = build(packages)[1]
     env = dict(
         os.environ,
         BLENDER_USER_CONFIG=str(profile / "config"),
@@ -32,6 +33,7 @@ def main():
         BLENDER_USER_EXTENSIONS=str(profile / "extensions"),
         AI_IN_BLENDER_MEMORY_DB=str(profile / "memory.sqlite3"),
         PYTHONIOENCODING="utf-8",
+        AI_IN_BLENDER_PACKAGE_DIR=str(packages),
     )
     steps = []
 
@@ -44,7 +46,7 @@ def main():
                 env=env,
                 stdout=output,
                 stderr=subprocess.STDOUT,
-                timeout=600,
+                timeout=900,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         steps.append({"name": name, "returncode": result.returncode, "log": str(log)})

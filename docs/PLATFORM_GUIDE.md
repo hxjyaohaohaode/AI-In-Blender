@@ -1,8 +1,8 @@
-# Agent Platform 3.2 使用指南
+# Agent Platform 3.3 使用指南
 
 ## 安装与第一条完整工作流
 
-Blender 4.2+ 选择 `dist/ai-in-blender-3.2.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。本机已实测 Windows / Blender 3.6.23 和 5.1.1；其他版本见验证记录。
+Blender 4.2+ 选择 `dist/ai-in-blender-3.3.0-extension.zip`，3.6 使用 legacy ZIP。两者安装一种，先停用旧版单文件插件。打开 3D View，按 N，进入 **AI Model**。当前稳定版基线为 Blender 5.2.2 LTS；完整版本与安装验收见验证记录。新版会事务性升级记忆数据库到 v3；升级后不要用旧版插件打开该数据库，可通过升级前备份回退。
 
 1. 在 Models & Settings 中添加 Chat Completions 模型，填写实际 Base URL、模型 ID 和密钥环境变量；密钥输入框只在当前会话保留。给不同提供商分配 planner、conversation、modeler、material、rigger、animator、reviewer 等角色。Vision 只有确实支持图片的模型才能启用。
 2. 在 Conversation & Memory 中讨论目标，例如“做一个适合游戏引擎的机械无人机，左右旋翼为独立部件，保留可动画的接口”。继续补充“总宽 1.2 米、两侧锚点分别在 X=±0.45 米”，真实原文会逐条保存。
@@ -72,7 +72,7 @@ Draw Sketch 创建原生 Grease Pencil 并进入绘制模式。用 Blender 原�
 
 原生质量检查包括非空、有限坐标/变换、退化面、可选闭合性、材料、UV、顶点预算、空间范围与命名锚点。未指定闭合要求时，开放边作为提示而不是一律失败。结构失败可进行有次数上限的模型修复，失败仍阻断依赖任务。对于复杂 Geometry Nodes、外部图像变更、驱动等数据，当前指纹与结构分析不保证全覆盖；采用人工检视与文件版本管理补充。
 
-Vision reviewer 使用真实 Workbench 图像看形状、比例与构图；该图不代表最终 PBR 光照或整段动画的质量。默认最终由用户确认当前版本的视觉质量。强制检验保证检查流程与失败阻断，不保证任何供应商的输出具有固定审美水平。
+Vision reviewer 使用带类型和帧号的真实预览；材质合同提供 Cycles 工作室材质实渲，动画合同提供有限帧采样。侧栏 Material 按钮可打开最近的材质预览。默认最终由用户确认当前交付版本的视觉质量；改变帧率、单位、世界或渲染设置也会使旧批准失效。质量合同、灯光专家及场景设置权限的完整示例见 [3.3 深度检查记录](QUALITY_AUDIT_3_3.md)。GLB 之外还会保存 `asset.blend`；外部纹理／缓存未打包时仍是文件引用。
 
 ## 重试、恢复与主动建议
 

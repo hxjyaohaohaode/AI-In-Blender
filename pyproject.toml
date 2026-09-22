@@ -1,6 +1,6 @@
 [project]
 name = "ai-in-blender"
-version = "3.2.0"
+version = "3.3.0"
 description = "A multi-model expert workflow studio inside Blender"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"

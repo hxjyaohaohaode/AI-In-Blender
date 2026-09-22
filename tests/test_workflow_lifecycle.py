@@ -63,6 +63,11 @@ class WorkflowLifecycleTests(unittest.TestCase):
             {"min_faces": 5, "max_faces": 2},
             {"anchor_object": "Cube"},
             {"require_rig": "yes"},
+            {"allow_scene_settings": True, "part_id": "isolated"},
+            {"allow_scene_settings": "yes"},
+            {"animation_range": [10, 1]},
+            {"sample_frames": [1, 1]},
+            {"sample_frames": [True]},
         ):
             with self.subTest(contract=contract), self.assertRaises(ValueError):
                 Workflow.from_plan(

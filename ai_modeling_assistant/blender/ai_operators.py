@@ -285,6 +285,7 @@ class AMA_OT_OpenPreview(Operator):
             ("primary", "Perspective", "Geometry perspective"),
             ("back", "Reverse", "Reverse geometry view"),
             ("top", "Top", "Top geometry view"),
+            ("material", "Material", "Cycles studio preview when materials are required"),
         ],
         default="primary",
     )

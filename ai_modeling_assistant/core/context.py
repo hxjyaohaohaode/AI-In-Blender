@@ -36,15 +36,17 @@ not verified truth; do not ask the model to approve itself.
 
 def compression_source(store, thread_id, budget):
     previous = store.summary(thread_id)
-    turns = store.turns(thread_id, complete_only=True)
     after = previous["through_id"] if previous else 0
-    fresh = [t for t in turns if t["id"] > after]
+    # Always advance the oldest uncovered prefix, even after more than 10,000
+    # turns. A bounded recent-history window is not a compression source.
+    fresh = store.turns(thread_id, after=after, complete_only=True, oldest_first=True, limit=260)
     if len(fresh) < 5 or sum(tokens(t["content"]) for t in fresh) < budget * 0.55:
         return None
     older = fresh[:-4]
     # Supply a contiguous prefix of COMPLETE turns. Never mark a clipped excerpt as
     # covered: doing so permanently hides unprovided constraints from later calls.
     source = {
+        "memory_epoch": store.memory_epoch(),
         "previous": json.loads(previous["body"]) if previous else {},
         "turns": [],
         "source_ids": json.loads(previous["source_ids"]) if previous else [],
@@ -55,12 +57,35 @@ def compression_source(store, thread_id, budget):
             source, turns=source["turns"] + [entry], source_ids=source["source_ids"] + [turn["id"]]
         )
         if (
-            tokens(json.dumps(candidate, ensure_ascii=False)) + tokens(COMPRESSION_SYSTEM) + 64
+            tokens(json.dumps(compression_request(candidate), ensure_ascii=False))
+            + tokens(COMPRESSION_SYSTEM)
+            + 64
             > budget
         ):
             break
         source = candidate
     return source if source["turns"] else None
+
+
+def compression_request(source):
+    # Full coverage IDs stay in the local journal. Transmit only IDs cited in
+    # actual source text, so coverage metadata cannot fill a model's context.
+    cited = {t["id"] for t in source["turns"]}
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            cited.update(i for i in value.get("sources", []) if type(i) is int)
+            if type(value.get("turn_id")) is int:
+                cited.add(value["turn_id"])
+            for item in value.values():
+                if isinstance(item, (dict, list)):
+                    visit(item)
+
+    visit(source["previous"])
+    return {"previous": source["previous"], "turns": source["turns"], "source_ids": sorted(cited)}
 
 
 def validate_summary(data, source_ids):
@@ -115,7 +140,8 @@ def build_context(
     store, project_id, thread_id, *, budget=8000, scene="", include_user=True, use_memory=True
 ):
     store.thread(thread_id, project_id)
-    turns = store.turns(thread_id, complete_only=True)
+    turns = store.turns(thread_id, complete_only=True, limit=256)
+    total_turns = store.turn_count(thread_id, complete_only=True)
     if not turns:
         raise ValueError("Conversation is empty")
     latest = turns[-1]
@@ -207,7 +233,7 @@ def build_context(
         raise ValueError("Context cannot fit the current user message")
     included_count = len(recent)
     covered = set(json.loads(summary["source_ids"])) if data["summary"] else set()
-    omitted = max(0, len(turns) - included_count - len(covered))
+    omitted = max(0, total_turns - included_count - len(covered))
     # An omission is visible both to the model and in the host audit. It is not
     # disguised as successful compression or full conversational recall.
     if omitted:
@@ -230,7 +256,7 @@ def build_context(
         "summary_mode": summary["mode"]
         if data["summary"]
         else ("omitted_for_budget" if summary else "none"),
-        "raw_turns": len(turns),
+        "raw_turns": total_turns,
         "omitted_turns": omitted,
     }
 
