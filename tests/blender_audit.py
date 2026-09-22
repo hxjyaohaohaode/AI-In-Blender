@@ -69,6 +69,7 @@ class ProductionAuditMixin:
 
         obj = self.cube()
         before, old_world = capture(self.scene, [obj]), self.scene.world
+        owners = {c.name for c in obj.users_collection}
         code = """import bpy
 bpy.context.scene.render.fps = 30
 bpy.context.scene.render.resolution_x = 800
@@ -91,6 +92,9 @@ bpy.context.scene.camera = bpy.context.object
             result = self.wait_scene_job(job)
             self.assertFalse(result.get("error"), result)
             loaded = job.commit(result, collection)
+            mesh = next(o for o in loaded if o.type == "MESH")
+            self.assertEqual({c.name for c in mesh.users_collection}, owners | {collection.name})
+            self.assertEqual(mesh.users, len(mesh.users_collection))
             self.assertEqual(self.scene.render.fps, 30)
             self.assertEqual(self.scene.render.resolution_x, 800)
             self.assertEqual(self.scene.frame_end, 44)

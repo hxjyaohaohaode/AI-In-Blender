@@ -268,17 +268,17 @@ class SceneJob:
             if validation_scene:
                 bpy.data.scenes.remove(validation_scene)
         # Nothing mutates source objects until every candidate and revision check passes.
-        for obj in loaded:
-            collection.objects.link(obj)
         remapped = []
         try:
             for old in self.objects:
                 new = by_id[old["ama_asset_id"]]
-                for owner in list(old.users_collection):
-                    if new.name not in owner.objects:
-                        owner.objects.link(new)
+                # user_remap transfers collection membership too. Linking first
+                # creates duplicate references and leaks user counts in Blender 3.6.
                 old.user_remap(new)
                 remapped.append((old, new))
+            for obj in loaded:
+                if obj.name not in collection.objects:
+                    collection.objects.link(obj)
         except Exception:
             # Originals still exist until every reference update has succeeded.
             for old, new in reversed(remapped):
